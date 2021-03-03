@@ -71,6 +71,9 @@ export ARTIFACTS="${ARTIFACTS:-${REPO_ROOT}/_artifacts}"
 export SKIP_RESOURCE_CLEANUP=false
 export USE_EXISTING_CLUSTER=false
 
+# TMP for checking this PR against prow without creating a new job
+export GINKGO_FOCUS=clusterctl
+
 # Run e2e tests
 mkdir -p "$ARTIFACTS"
 echo "+ run tests!"

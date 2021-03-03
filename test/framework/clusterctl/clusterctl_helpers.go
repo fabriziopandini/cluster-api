@@ -36,9 +36,13 @@ import (
 type InitManagementClusterAndWatchControllerLogsInput struct {
 	ClusterProxy             framework.ClusterProxy
 	ClusterctlConfigPath     string
+	CoreProvider             string
+	BootstrapProviders       []string
+	ControlPlaneProviders    []string
 	InfrastructureProviders  []string
 	LogFolder                string
 	DisableMetricsCollection bool
+	BinaryURL                string
 }
 
 // InitManagementClusterAndWatchControllerLogs initializes a management using clusterctl and setup watches for controller logs.
@@ -51,24 +55,50 @@ func InitManagementClusterAndWatchControllerLogs(ctx context.Context, input Init
 	Expect(input.InfrastructureProviders).ToNot(BeEmpty(), "Invalid argument. input.InfrastructureProviders can't be empty when calling InitManagementClusterAndWatchControllerLogs")
 	Expect(os.MkdirAll(input.LogFolder, 0755)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for InitManagementClusterAndWatchControllerLogs")
 
+	if input.CoreProvider == "" {
+		input.CoreProvider = config.ClusterAPIProviderName
+	}
+	if len(input.BootstrapProviders) == 0 {
+		input.BootstrapProviders = []string{config.KubeadmBootstrapProviderName}
+	}
+	if len(input.ControlPlaneProviders) == 0 {
+		input.ControlPlaneProviders = []string{config.KubeadmControlPlaneProviderName}
+	}
+
 	client := input.ClusterProxy.GetClient()
 	controllersDeployments := framework.GetControllerDeployments(ctx, framework.GetControllerDeploymentsInput{
 		Lister: client,
 	})
 	if len(controllersDeployments) == 0 {
-		Init(ctx, InitInput{
-			// pass reference to the management cluster hosting this test
-			KubeconfigPath: input.ClusterProxy.GetKubeconfigPath(),
-			// pass the clusterctl config file that points to the local provider repository created for this test
-			ClusterctlConfigPath: input.ClusterctlConfigPath,
-			// setup the desired list of providers for a single-tenant management cluster
-			CoreProvider:            config.ClusterAPIProviderName,
-			BootstrapProviders:      []string{config.KubeadmBootstrapProviderName},
-			ControlPlaneProviders:   []string{config.KubeadmControlPlaneProviderName},
-			InfrastructureProviders: input.InfrastructureProviders,
-			// setup clusterctl logs folder
-			LogFolder: input.LogFolder,
-		})
+		if input.BinaryURL != "" {
+			InitWithBinary(ctx, input.BinaryURL, InitInput{
+				// pass reference to the management cluster hosting this test
+				KubeconfigPath: input.ClusterProxy.GetKubeconfigPath(),
+				// pass the clusterctl config file that points to the local provider repository created for this test
+				ClusterctlConfigPath: input.ClusterctlConfigPath,
+				// setup the desired list of providers for a single-tenant management cluster
+				CoreProvider:            input.CoreProvider,
+				BootstrapProviders:      input.BootstrapProviders,
+				ControlPlaneProviders:   input.ControlPlaneProviders,
+				InfrastructureProviders: input.InfrastructureProviders,
+				// setup clusterctl logs folder
+				LogFolder: input.LogFolder,
+			})
+		} else {
+			Init(ctx, InitInput{
+				// pass reference to the management cluster hosting this test
+				KubeconfigPath: input.ClusterProxy.GetKubeconfigPath(),
+				// pass the clusterctl config file that points to the local provider repository created for this test
+				ClusterctlConfigPath: input.ClusterctlConfigPath,
+				// setup the desired list of providers for a single-tenant management cluster
+				CoreProvider:            input.CoreProvider,
+				BootstrapProviders:      input.BootstrapProviders,
+				ControlPlaneProviders:   input.ControlPlaneProviders,
+				InfrastructureProviders: input.InfrastructureProviders,
+				// setup clusterctl logs folder
+				LogFolder: input.LogFolder,
+			})
+		}
 	}
 
 	log.Logf("Waiting for provider controllers to be running")
@@ -93,6 +123,62 @@ func InitManagementClusterAndWatchControllerLogs(ctx context.Context, input Init
 		if input.DisableMetricsCollection {
 			return
 		}
+		framework.WatchPodMetrics(ctx, framework.WatchPodMetricsInput{
+			GetLister:   client,
+			ClientSet:   input.ClusterProxy.GetClientSet(),
+			Deployment:  deployment,
+			MetricsPath: filepath.Join(input.LogFolder, "controllers"),
+		})
+	}
+}
+
+// UpgradeManagementClusterAndWaitInput is the input type for UpgradeManagementClusterAndWait.
+type UpgradeManagementClusterAndWaitInput struct {
+	ClusterProxy         framework.ClusterProxy
+	ClusterctlConfigPath string
+	ManagementGroup      string
+	Contract             string
+	LogFolder            string
+}
+
+// UpgradeManagementClusterAndWait upgrades provider a management cluster using clusterctl, and waits for the cluster to be ready.
+func UpgradeManagementClusterAndWait(ctx context.Context, input UpgradeManagementClusterAndWaitInput, intervals ...interface{}) {
+	Expect(ctx).NotTo(BeNil(), "ctx is required for UpgradeManagementClusterAndWait")
+	Expect(input.ClusterProxy).ToNot(BeNil(), "Invalid argument. input.ClusterProxy can't be nil when calling UpgradeManagementClusterAndWait")
+	Expect(input.ClusterctlConfigPath).To(BeAnExistingFile(), "Invalid argument. input.ClusterctlConfigPath must be an existing file when calling UpgradeManagementClusterAndWait")
+	Expect(input.ManagementGroup).ToNot(BeEmpty(), "Invalid argument. input.ManagementGroup can't be empty when calling UpgradeManagementClusterAndWait")
+	Expect(input.Contract).ToNot(BeEmpty(), "Invalid argument. input.Contract can't be empty when calling UpgradeManagementClusterAndWait")
+	Expect(os.MkdirAll(input.LogFolder, 0755)).To(Succeed(), "Invalid argument. input.LogFolder can't be created for UpgradeManagementClusterAndWait")
+
+	Upgrade(ctx, UpgradeInput{
+		ClusterctlConfigPath: input.ClusterctlConfigPath,
+		KubeconfigPath:       input.ClusterProxy.GetKubeconfigPath(),
+		ManagementGroup:      input.ManagementGroup,
+		Contract:             input.Contract,
+		LogFolder:            input.LogFolder,
+	})
+
+	client := input.ClusterProxy.GetClient()
+
+	log.Logf("Waiting for provider controllers to be running")
+	controllersDeployments := framework.GetControllerDeployments(ctx, framework.GetControllerDeploymentsInput{
+		Lister: client,
+	})
+	Expect(controllersDeployments).ToNot(BeEmpty(), "The list of controller deployments should not be empty")
+	for _, deployment := range controllersDeployments {
+		framework.WaitForDeploymentsAvailable(ctx, framework.WaitForDeploymentsAvailableInput{
+			Getter:     client,
+			Deployment: deployment,
+		}, intervals...)
+
+		// Start streaming logs from all controller providers
+		framework.WatchDeploymentLogs(ctx, framework.WatchDeploymentLogsInput{
+			GetLister:  client,
+			ClientSet:  input.ClusterProxy.GetClientSet(),
+			Deployment: deployment,
+			LogPath:    filepath.Join(input.LogFolder, "controllers"),
+		})
+
 		framework.WatchPodMetrics(ctx, framework.WatchPodMetricsInput{
 			GetLister:   client,
 			ClientSet:   input.ClusterProxy.GetClientSet(),
@@ -130,7 +216,7 @@ func ApplyClusterTemplateAndWait(ctx context.Context, input ApplyClusterTemplate
 	Expect(result).ToNot(BeNil(), "Invalid argument. result can't be nil when calling ApplyClusterTemplateAndWait")
 
 	log.Logf("Creating the workload cluster with name %q using the %q template (Kubernetes %s, %d control-plane machines, %d worker machines)",
-		input.ConfigCluster.ClusterName, valueOrDefault(input.ConfigCluster.Flavor), input.ConfigCluster.KubernetesVersion, *input.ConfigCluster.ControlPlaneMachineCount, *input.ConfigCluster.WorkerMachineCount)
+		input.ConfigCluster.ClusterName, valueOrDefault(input.ConfigCluster.Flavor), input.ConfigCluster.KubernetesVersion, input.ConfigCluster.ControlPlaneMachineCount, input.ConfigCluster.WorkerMachineCount)
 
 	log.Logf("Getting the cluster template yaml")
 	workloadClusterTemplate := ConfigCluster(ctx, ConfigClusterInput{

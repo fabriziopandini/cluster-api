@@ -19,7 +19,12 @@ package clusterctl
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo"
@@ -80,6 +85,85 @@ func Init(ctx context.Context, input InitInput) {
 
 	_, err := clusterctlClient.Init(initOpt)
 	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl init")
+}
+
+// InitWithBinary downloads a clusterctl binary and calls init with the list of providers defined in the local repository
+func InitWithBinary(ctx context.Context, url string, input InitInput) {
+	log.Logf("downloading clusterctl binary from %s", url)
+	tmpfile := downloadToTmpFile(url)
+	defer os.Remove(tmpfile) // clean up
+
+	err := os.Chmod(tmpfile, 0744)
+	Expect(err).ToNot(HaveOccurred(), "failed to chmod temporary file")
+
+	log.Logf("clusterctl init --core %s --bootstrap %s --control-plane %s --infrastructure %s",
+		input.CoreProvider,
+		strings.Join(input.BootstrapProviders, ", "),
+		strings.Join(input.ControlPlaneProviders, ", "),
+		strings.Join(input.InfrastructureProviders, ", "),
+	)
+
+	cmd := exec.Command(tmpfile, "init", //nolint:gosec // the command path is the temporary file created above
+		"--core", input.CoreProvider,
+		"--bootstrap", strings.Join(input.BootstrapProviders, ", "),
+		"--control-plane", strings.Join(input.ControlPlaneProviders, ", "),
+		"--infrastructure", strings.Join(input.InfrastructureProviders, ", "),
+		"--config", input.ClusterctlConfigPath,
+		"--kubeconfig", input.KubeconfigPath,
+	)
+
+	out, err := cmd.CombinedOutput()
+	_ = ioutil.WriteFile(filepath.Join(input.LogFolder, "clusterctl-init.log"), out, 0644) //nolint:gosec // this is a log file to be shared via prow artifacts
+	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl init")
+}
+
+func downloadToTmpFile(url string) string {
+	tmpfile, err := ioutil.TempFile("", "clusterctl")
+	Expect(err).ToNot(HaveOccurred(), "failed to get temporary file")
+	defer tmpfile.Close()
+
+	// Get the data
+	resp, err := http.Get(url)
+	Expect(err).ToNot(HaveOccurred(), "failed to get clusterctl")
+	defer resp.Body.Close()
+
+	// Write the body to file
+	_, err = io.Copy(tmpfile, resp.Body)
+	Expect(err).ToNot(HaveOccurred(), "failed to write temporary file")
+
+	return tmpfile.Name()
+}
+
+// UpgradeInput is the input for Upgrade.
+type UpgradeInput struct {
+	LogFolder            string
+	ClusterctlConfigPath string
+	KubeconfigPath       string
+	ManagementGroup      string
+	Contract             string
+}
+
+// Upgrade calls clusterctl upgrade apply with the list of providers defined in the local repository
+func Upgrade(ctx context.Context, input UpgradeInput) {
+	log.Logf("clusterctl upgrade apply --management-group %s --contract %s",
+		input.ManagementGroup,
+		input.Contract,
+	)
+
+	upgradeOpt := clusterctlclient.ApplyUpgradeOptions{
+		Kubeconfig: clusterctlclient.Kubeconfig{
+			Path:    input.KubeconfigPath,
+			Context: "",
+		},
+		ManagementGroup: input.ManagementGroup,
+		Contract:        input.Contract,
+	}
+
+	clusterctlClient, log := getClusterctlClientWithLogger(input.ClusterctlConfigPath, "clusterctl-upgrade.log", input.LogFolder)
+	defer log.Close()
+
+	err := clusterctlClient.ApplyUpgrade(upgradeOpt)
+	Expect(err).ToNot(HaveOccurred(), "failed to run clusterctl upgrade")
 }
 
 // ConfigClusterInput is the input for ConfigCluster.
