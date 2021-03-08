@@ -21,6 +21,7 @@ import (
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
 	clusterctlv1 "sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3"
 	"sigs.k8s.io/cluster-api/cmd/clusterctl/client/cluster"
 )
@@ -99,6 +100,10 @@ type ApplyUpgradeOptions struct {
 }
 
 func (c *clusterctlClient) ApplyUpgrade(options ApplyUpgradeOptions) error {
+	if options.Contract != "" && options.Contract != clusterv1.GroupVersion.Version {
+		return errors.Errorf("current version of clusterctl could only upgrade to %s contract, requested %s", clusterv1.GroupVersion.Version, options.Contract)
+	}
+
 	// Get the client for interacting with the management cluster.
 	clusterClient, err := c.clusterClientFactory(ClusterClientFactoryInput{Kubeconfig: options.Kubeconfig})
 	if err != nil {
