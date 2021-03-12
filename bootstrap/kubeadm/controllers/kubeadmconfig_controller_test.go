@@ -33,7 +33,6 @@ import (
 	"k8s.io/utils/pointer"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
-	kubeadmv1beta1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
 	fakeremote "sigs.k8s.io/cluster-api/controllers/remote/fake"
 	expv1 "sigs.k8s.io/cluster-api/exp/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/feature"
@@ -1032,8 +1031,8 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 	}
 
 	caHash := []string{"...."}
-	bootstrapToken := kubeadmv1beta1.Discovery{
-		BootstrapToken: &kubeadmv1beta1.BootstrapTokenDiscovery{
+	bootstrapToken := bootstrapv1.Discovery{
+		BootstrapToken: &bootstrapv1.BootstrapTokenDiscovery{
 			CACertHashes: caHash,
 		},
 	}
@@ -1056,7 +1055,7 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 			cluster: goodcluster,
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
 						Discovery: bootstrapToken,
 					},
 				},
@@ -1075,9 +1074,9 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 			cluster: goodcluster,
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
-						Discovery: kubeadmv1beta1.Discovery{
-							File: &kubeadmv1beta1.FileDiscovery{},
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
+						Discovery: bootstrapv1.Discovery{
+							File: &bootstrapv1.FileDiscovery{},
 						},
 					},
 				},
@@ -1093,9 +1092,9 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 			cluster: goodcluster,
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
-						Discovery: kubeadmv1beta1.Discovery{
-							BootstrapToken: &kubeadmv1beta1.BootstrapTokenDiscovery{
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
+						Discovery: bootstrapv1.Discovery{
+							BootstrapToken: &bootstrapv1.BootstrapTokenDiscovery{
 								CACertHashes:      caHash,
 								APIServerEndpoint: "bar.com:6443",
 							},
@@ -1114,9 +1113,9 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 			cluster: goodcluster,
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
-						Discovery: kubeadmv1beta1.Discovery{
-							BootstrapToken: &kubeadmv1beta1.BootstrapTokenDiscovery{
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
+						Discovery: bootstrapv1.Discovery{
+							BootstrapToken: &bootstrapv1.BootstrapTokenDiscovery{
 								CACertHashes: caHash,
 								Token:        "abcdef.0123456789abcdef",
 							},
@@ -1135,9 +1134,9 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileBehaviors(t *testin
 			cluster: goodcluster,
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
-						Discovery: kubeadmv1beta1.Discovery{
-							BootstrapToken: &kubeadmv1beta1.BootstrapTokenDiscovery{
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
+						Discovery: bootstrapv1.Discovery{
+							BootstrapToken: &bootstrapv1.BootstrapTokenDiscovery{
 								CACertHashes: caHash,
 							},
 						},
@@ -1183,9 +1182,9 @@ func TestKubeadmConfigReconciler_Reconcile_DiscoveryReconcileFailureBehaviors(t 
 			cluster: &clusterv1.Cluster{}, // cluster without endpoints
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					JoinConfiguration: &kubeadmv1beta1.JoinConfiguration{
-						Discovery: kubeadmv1beta1.Discovery{
-							BootstrapToken: &kubeadmv1beta1.BootstrapTokenDiscovery{
+					JoinConfiguration: &bootstrapv1.JoinConfiguration{
+						Discovery: bootstrapv1.Discovery{
+							BootstrapToken: &bootstrapv1.BootstrapTokenDiscovery{
 								CACertHashes: []string{"item"},
 							},
 						},
@@ -1225,10 +1224,10 @@ func TestKubeadmConfigReconciler_Reconcile_DynamicDefaultsForClusterConfiguratio
 			name: "Config settings have precedence",
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					ClusterConfiguration: &kubeadmv1beta1.ClusterConfiguration{
+					ClusterConfiguration: &bootstrapv1.ClusterConfiguration{
 						ClusterName:       "mycluster",
 						KubernetesVersion: "myversion",
-						Networking: kubeadmv1beta1.Networking{
+						Networking: bootstrapv1.Networking{
 							PodSubnet:     "myPodSubnet",
 							ServiceSubnet: "myServiceSubnet",
 							DNSDomain:     "myDNSDomain",
@@ -1260,7 +1259,7 @@ func TestKubeadmConfigReconciler_Reconcile_DynamicDefaultsForClusterConfiguratio
 			name: "Top level object settings are used in case config settings are missing",
 			config: &bootstrapv1.KubeadmConfig{
 				Spec: bootstrapv1.KubeadmConfigSpec{
-					ClusterConfiguration: &kubeadmv1beta1.ClusterConfiguration{},
+					ClusterConfiguration: &bootstrapv1.ClusterConfiguration{},
 				},
 			},
 			cluster: &clusterv1.Cluster{
@@ -1330,17 +1329,17 @@ func TestKubeadmConfigReconciler_Reconcile_AlwaysCheckCAVerificationUnlessReques
 
 	testcases := []struct {
 		name               string
-		discovery          *kubeadmv1beta1.BootstrapTokenDiscovery
+		discovery          *bootstrapv1.BootstrapTokenDiscovery
 		skipCAVerification bool
 	}{
 		{
 			name:               "Do not skip CA verification by default",
-			discovery:          &kubeadmv1beta1.BootstrapTokenDiscovery{},
+			discovery:          &bootstrapv1.BootstrapTokenDiscovery{},
 			skipCAVerification: false,
 		},
 		{
 			name: "Skip CA verification if requested by the user",
-			discovery: &kubeadmv1beta1.BootstrapTokenDiscovery{
+			discovery: &bootstrapv1.BootstrapTokenDiscovery{
 				UnsafeSkipCAVerification: true,
 			},
 			skipCAVerification: true,
@@ -1349,7 +1348,7 @@ func TestKubeadmConfigReconciler_Reconcile_AlwaysCheckCAVerificationUnlessReques
 			// skipCAVerification should be true since no Cert Hashes are provided, but reconcile will *always* get or create certs.
 			// TODO: Certificate get/create behavior needs to be mocked to enable this test.
 			name: "cannot test for defaulting behavior through the reconcile function",
-			discovery: &kubeadmv1beta1.BootstrapTokenDiscovery{
+			discovery: &bootstrapv1.BootstrapTokenDiscovery{
 				CACertHashes: []string{""},
 			},
 			skipCAVerification: false,
@@ -1822,7 +1821,7 @@ func newKubeadmConfig(machine *clusterv1.Machine, name string) *bootstrapv1.Kube
 
 func newWorkerJoinKubeadmConfig(machine *clusterv1.Machine) *bootstrapv1.KubeadmConfig {
 	c := newKubeadmConfig(machine, "worker-join-cfg")
-	c.Spec.JoinConfiguration = &kubeadmv1beta1.JoinConfiguration{
+	c.Spec.JoinConfiguration = &bootstrapv1.JoinConfiguration{
 		ControlPlane: nil,
 	}
 	return c
@@ -1830,16 +1829,16 @@ func newWorkerJoinKubeadmConfig(machine *clusterv1.Machine) *bootstrapv1.Kubeadm
 
 func newControlPlaneJoinKubeadmConfig(machine *clusterv1.Machine, name string) *bootstrapv1.KubeadmConfig {
 	c := newKubeadmConfig(machine, name)
-	c.Spec.JoinConfiguration = &kubeadmv1beta1.JoinConfiguration{
-		ControlPlane: &kubeadmv1beta1.JoinControlPlane{},
+	c.Spec.JoinConfiguration = &bootstrapv1.JoinConfiguration{
+		ControlPlane: &bootstrapv1.JoinControlPlane{},
 	}
 	return c
 }
 
 func newControlPlaneInitKubeadmConfig(machine *clusterv1.Machine, name string) *bootstrapv1.KubeadmConfig {
 	c := newKubeadmConfig(machine, name)
-	c.Spec.ClusterConfiguration = &kubeadmv1beta1.ClusterConfiguration{}
-	c.Spec.InitConfiguration = &kubeadmv1beta1.InitConfiguration{}
+	c.Spec.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{}
+	c.Spec.InitConfiguration = &bootstrapv1.InitConfiguration{}
 	return c
 }
 
@@ -1873,7 +1872,7 @@ func newMachinePoolKubeadmConfig(machinePool *expv1.MachinePool, name string) *b
 
 func newWorkerPoolJoinKubeadmConfig(machinePool *expv1.MachinePool) *bootstrapv1.KubeadmConfig {
 	c := newMachinePoolKubeadmConfig(machinePool, "workerpool-join-cfg")
-	c.Spec.JoinConfiguration = &kubeadmv1beta1.JoinConfiguration{
+	c.Spec.JoinConfiguration = &bootstrapv1.JoinConfiguration{
 		ControlPlane: nil,
 	}
 	return c
@@ -1882,7 +1881,7 @@ func newWorkerPoolJoinKubeadmConfig(machinePool *expv1.MachinePool) *bootstrapv1
 func createSecrets(t *testing.T, cluster *clusterv1.Cluster, config *bootstrapv1.KubeadmConfig) []client.Object {
 	out := []client.Object{}
 	if config.Spec.ClusterConfiguration == nil {
-		config.Spec.ClusterConfiguration = &kubeadmv1beta1.ClusterConfiguration{}
+		config.Spec.ClusterConfiguration = &bootstrapv1.ClusterConfiguration{}
 	}
 	certificates := secret.NewCertificatesForInitialControlPlane(config.Spec.ClusterConfiguration)
 	if err := certificates.Generate(); err != nil {

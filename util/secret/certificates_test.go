@@ -21,7 +21,7 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	"sigs.k8s.io/cluster-api/bootstrap/kubeadm/types/v1beta1"
+	bootstrapv1 "sigs.k8s.io/cluster-api/bootstrap/kubeadm/api/v1alpha4"
 	"sigs.k8s.io/cluster-api/util/secret"
 )
 
@@ -35,7 +35,7 @@ func TestNewCertificatesForJoiningControlPlane_Stacked(t *testing.T) {
 func TesNewControlPlaneJoinCerts_Stacked(t *testing.T) {
 	g := NewWithT(t)
 
-	config := &v1beta1.ClusterConfiguration{}
+	config := &bootstrapv1.ClusterConfiguration{}
 	certs := secret.NewControlPlaneJoinCerts(config)
 	g.Expect(certs.GetByPurpose(secret.EtcdCA).KeyFile).NotTo(BeEmpty())
 }
@@ -43,9 +43,9 @@ func TesNewControlPlaneJoinCerts_Stacked(t *testing.T) {
 func TestNewControlPlaneJoinCerts_External(t *testing.T) {
 	g := NewWithT(t)
 
-	config := &v1beta1.ClusterConfiguration{
-		Etcd: v1beta1.Etcd{
-			External: &v1beta1.ExternalEtcd{},
+	config := &bootstrapv1.ClusterConfiguration{
+		Etcd: bootstrapv1.Etcd{
+			External: &bootstrapv1.ExternalEtcd{},
 		},
 	}
 

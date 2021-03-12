@@ -170,8 +170,11 @@ func FuzzTestFunc(input FuzzTestFuncInput) func(*testing.T) {
 				g.Expect(spokeAfter.ConvertFrom(hubCopy)).To(gomega.Succeed())
 
 				// Remove data annotation eventually added by ConvertFrom for avoiding data loss in hub-spoke-hub round trips
-				metaAfter := spokeAfter.(metav1.Object)
-				delete(metaAfter.GetAnnotations(), DataAnnotation)
+				// NOTE: Kubeadm types does not have ObjectMeta, so this step is executed only when required.
+				metaAfter, ok := spokeAfter.(metav1.Object)
+				if ok {
+					delete(metaAfter.GetAnnotations(), DataAnnotation)
+				}
 
 				if input.SpokeAfterMutation != nil {
 					input.SpokeAfterMutation(spokeAfter)
