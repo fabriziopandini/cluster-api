@@ -376,7 +376,7 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 			},
 		}
 	}
-	initdata, err := kubeadmv1beta1.ConfigurationToYAMLForVersion(scope.Config.Spec.InitConfiguration, scope.ConfigOwner.KubernetesVersion())
+	initdata, err := kubeadmtypes.MarshalInitConfigurationForVersion(scope.Config.Spec.InitConfiguration, kubernetesVersion)
 	if err != nil {
 		scope.Error(err, "Failed to marshal init configuration")
 		return ctrl.Result{}, err
@@ -394,7 +394,7 @@ func (r *KubeadmConfigReconciler) handleClusterNotInitialized(ctx context.Contex
 	// injects into config.ClusterConfiguration values from top level object
 	r.reconcileTopLevelObjectSettings(ctx, scope.Cluster, machine, scope.Config)
 
-	clusterdata, err := kubeadmv1beta1.ConfigurationToYAMLForVersion(scope.Config.Spec.ClusterConfiguration, scope.ConfigOwner.KubernetesVersion())
+	clusterdata, err := kubeadmtypes.MarshalClusterConfigurationForVersion(scope.Config.Spec.ClusterConfiguration, kubernetesVersion)
 	if err != nil {
 		scope.Error(err, "Failed to marshal cluster configuration")
 		return ctrl.Result{}, err
@@ -476,7 +476,7 @@ func (r *KubeadmConfigReconciler) joinWorker(ctx context.Context, scope *Scope) 
 		return res, nil
 	}
 
-	joinData, err := kubeadmv1beta1.ConfigurationToYAMLForVersion(scope.Config.Spec.JoinConfiguration, scope.ConfigOwner.KubernetesVersion())
+	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(scope.Config.Spec.JoinConfiguration, scope.ConfigOwner.KubernetesVersion())
 	if err != nil {
 		scope.Error(err, "Failed to marshal join configuration")
 		return ctrl.Result{}, err
@@ -557,7 +557,7 @@ func (r *KubeadmConfigReconciler) joinControlplane(ctx context.Context, scope *S
 		return res, nil
 	}
 
-	joinData, err := kubeadmv1beta1.ConfigurationToYAMLForVersion(scope.Config.Spec.JoinConfiguration, scope.ConfigOwner.KubernetesVersion())
+	joinData, err := kubeadmtypes.MarshalJoinConfigurationForVersion(scope.Config.Spec.JoinConfiguration, scope.ConfigOwner.KubernetesVersion())
 	if err != nil {
 		scope.Error(err, "Failed to marshal join configuration")
 		return ctrl.Result{}, err
