@@ -560,7 +560,7 @@ func TestNewHelper(t *testing.T) {
 					"metadata": map[string]interface{}{
 						"annotations": map[string]interface{}{
 							// Prevent changes to managedField to be generated, so the test can focus on how values are merged.
-							clusterv1.ClusterTopologyManagedFieldsAnnotation: "controlPlaneEndpoint.host, controlPlaneEndpoint.port",
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "",
 						},
 					},
 				},
@@ -603,7 +603,7 @@ func TestNewHelper(t *testing.T) {
 			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"foo.bar, foo.baz\"}},\"spec\":{\"foo\":{\"bar\":\"\",\"baz\":0}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
 		},
 		{
-			name: "Managed field annotation is empty when modified have spec values",
+			name: "Managed field annotation is empty when modified have no spec values",
 			original: &unstructured.Unstructured{ // current
 				Object: map[string]interface{}{
 					"spec": map[string]interface{}{
@@ -622,7 +622,7 @@ func TestNewHelper(t *testing.T) {
 			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
 		},
 		{
-			name: "Managed field annotation from a previous reconcile are cleaned up when modified have spec values",
+			name: "Managed field annotation from a previous reconcile are cleaned up when modified have no spec values",
 			original: &unstructured.Unstructured{ // current
 				Object: map[string]interface{}{
 					"metadata": map[string]interface{}{
@@ -641,6 +641,46 @@ func TestNewHelper(t *testing.T) {
 			modified: &unstructured.Unstructured{ // desired
 				Object: map[string]interface{}{},
 			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: false,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+		},
+		{
+			name: "Managed field annotation does not include ignored paths - exact match",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{},
+			},
+			modified: &unstructured.Unstructured{ // desired
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"foo": map[string]interface{}{
+							"bar": "",
+							"baz": int64(0),
+						},
+					},
+				},
+			},
+			options:            []HelperOption{IgnorePaths{contract.Path{"spec", "foo", "bar"}}},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"foo.baz\"}},\"spec\":{\"foo\":{\"baz\":0}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+		},
+		{
+			name: "Managed field annotation does not include ignored paths - path prefix",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{},
+			},
+			modified: &unstructured.Unstructured{ // desired
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"foo": map[string]interface{}{
+							"bar": "",
+							"baz": int64(0),
+						},
+					},
+				},
+			},
+			options:            []HelperOption{IgnorePaths{contract.Path{"spec", "foo"}}},
 			wantHasChanges:     true,
 			wantHasSpecChanges: false,
 			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),

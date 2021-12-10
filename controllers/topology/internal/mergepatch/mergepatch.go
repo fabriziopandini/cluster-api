@@ -70,7 +70,7 @@ func NewHelper(original, modified client.Object, c client.Client, opts ...Helper
 
 	// Store the list of paths managed by the topology controller in the current patch operation;
 	// this information will be used by the next patch operation.
-	modifiedWithManagedFieldAnnotation, err := DeepCopyWithManagedFieldAnnotation(modified)
+	modifiedWithManagedFieldAnnotation, err := deepCopyWithManagedFieldAnnotation(modified, helperOptions.ignorePaths)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create a copy of object with the managed field annotation")
 	}

@@ -36,10 +36,14 @@ const (
 // DeepCopyWithManagedFieldAnnotation returns a copy of the object with an annotation
 // Keeping track of the fields the object is setting.
 func DeepCopyWithManagedFieldAnnotation(obj client.Object) (client.Object, error) {
+	return deepCopyWithManagedFieldAnnotation(obj, nil)
+}
+
+func deepCopyWithManagedFieldAnnotation(obj client.Object, ignorePaths []contract.Path) (client.Object, error) {
 	// Store the list of paths managed by the topology controller in the current patch operation;
 	// this information will be used by the next patch operation.
 	objWithManagedFieldAnnotation := obj.DeepCopyObject().(client.Object)
-	if err := storeManagedPaths(objWithManagedFieldAnnotation); err != nil {
+	if err := storeManagedPaths(objWithManagedFieldAnnotation, ignorePaths); err != nil {
 		return nil, err
 	}
 	return objWithManagedFieldAnnotation, nil
@@ -78,7 +82,7 @@ func getManagedPaths(obj client.Object) []contract.Path {
 // to easily discover which fields have been set by templates + patches/variables at a given reconcile;
 // instead, it is not necessary to store managed paths for typed objets (e.g. Cluster, MachineDeployments)
 // given that the topology controller explicitly sets a well-known, immutable list of fields at every reconcile.
-func storeManagedPaths(obj client.Object) error {
+func storeManagedPaths(obj client.Object, ignorePaths []contract.Path) error {
 	// Return early if the object is not unstructured.
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
@@ -92,13 +96,27 @@ func storeManagedPaths(obj client.Object) error {
 	}
 
 	// Build a string representation of the paths under spec which are being managed by the object (the fields
-	// a topology is expressing an opinion/value on).
+	// a topology is expressing an opinion/value on, minus the ones we are explicitly ignoring).
 	managedFields := ""
 	if ok {
 		s := []string{}
 		paths := paths([]string{}, spec)
 		for _, p := range paths {
-			s = append(s, strings.Join(p, managedPathSeparator))
+			ignore := false
+			pathString := strings.Join(p, managedPathSeparator)
+			for _, i := range ignorePaths {
+				if i[0] != "spec" {
+					continue
+				}
+				ignorePathString := strings.Join(i[1:], managedPathSeparator)
+				if pathString == ignorePathString || strings.HasPrefix(pathString, ignorePathString+managedPathSeparator) {
+					ignore = true
+					break
+				}
+			}
+			if !ignore {
+				s = append(s, strings.Join(p, managedPathSeparator))
+			}
 		}
 
 		// Sort paths to get a predictable order (useful for readability and testing, not relevant at parse time).

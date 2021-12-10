@@ -71,6 +71,7 @@ func Test_storeManagedPaths(t *testing.T) {
 	tests := []struct {
 		name           string
 		obj            client.Object
+		IgnorePaths    []contract.Path
 		wantAnnotation string
 	}{
 		{
@@ -98,7 +99,7 @@ func Test_storeManagedPaths(t *testing.T) {
 			wantAnnotation: "",
 		},
 		{
-			name: "Add empty annotation in case of changes to spec",
+			name: "Add annotation in case of changes to spec",
 			obj: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"spec": map[string]interface{}{
@@ -112,7 +113,7 @@ func Test_storeManagedPaths(t *testing.T) {
 			wantAnnotation: "bar.baz, foo",
 		},
 		{
-			name: "Add empty annotation handling properly deep nesting in spec",
+			name: "Add annotation handling properly deep nesting in spec",
 			obj: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"spec": map[string]interface{}{
@@ -132,12 +133,37 @@ func Test_storeManagedPaths(t *testing.T) {
 			},
 			wantAnnotation: "kubeadmConfigSpec.clusterConfiguration.version, kubeadmConfigSpec.initConfiguration.bootstrapToken, kubeadmConfigSpec.joinConfiguration, replicas, version",
 		},
+		{
+			name: "Annotation does not include ignorePaths",
+			obj: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"replicas": int64(4),
+						"version":  "1.17.3",
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"version": "v2.0.1",
+							},
+							"initConfiguration": map[string]interface{}{
+								"bootstrapToken": []interface{}{"abcd", "defg"},
+							},
+							"joinConfiguration": nil,
+						},
+					},
+				},
+			},
+			IgnorePaths: []contract.Path{
+				{"spec", "version"}, // exact match (drops a single path)
+				{"spec", "kubeadmConfigSpec", "initConfiguration"}, // prefix match (drops everything below a path)
+			},
+			wantAnnotation: "kubeadmConfigSpec.clusterConfiguration.version, kubeadmConfigSpec.joinConfiguration, replicas",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			err := storeManagedPaths(tt.obj)
+			err := storeManagedPaths(tt.obj, tt.IgnorePaths)
 			g.Expect(err).ToNot(HaveOccurred())
 
 			gotAnnotation := tt.obj.GetAnnotations()[clusterv1.ClusterTopologyManagedFieldsAnnotation]
