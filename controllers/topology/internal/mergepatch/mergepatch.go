@@ -47,8 +47,8 @@ type Helper struct {
 // NewHelper will return a patch that yields the modified document when applied to the original document.
 // NOTE: patch helper consider changes only in metadata.labels, metadata.annotation and spec.
 // NOTE: In the case of ClusterTopologyReconciler, original is the current object, modified is the desired object, and
-// the patch returns all the changes required to align current to what is defined in desired; fields not defined in desired
-// are going to be preserved without changes.
+// the patch returns all the changes required to align current to what is defined in desired; fields not managed
+// by the topology controller are going to be preserved without changes.
 func NewHelper(original, modified client.Object, c client.Client, opts ...HelperOption) (*Helper, error) {
 	helperOptions := &HelperOptions{}
 	helperOptions = helperOptions.ApplyOptions(opts)
@@ -58,22 +58,33 @@ func NewHelper(original, modified client.Object, c client.Client, opts ...Helper
 		{"spec"},
 	}
 
+	// Infer the list of paths managed by the topology controller in the previous patch operation;
+	// changes to those paths are going to be considered authoritative.
+	helperOptions.managedPaths = getManagedPaths(original)
+
 	// Convert the input objects to json.
 	originalJSON, err := json.Marshal(original)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to marshal original object to json")
 	}
 
-	modifiedJSON, err := json.Marshal(modified)
+	// Store the list of paths managed by the topology controller in the current patch operation;
+	// this information will be used by the next patch operation.
+	modifiedWithManagedFieldAnnotation, err := DeepCopyWithManagedFieldAnnotation(modified)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create a copy of object with the managed field annotation")
+	}
+
+	modifiedJSON, err := json.Marshal(modifiedWithManagedFieldAnnotation)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to marshal modified object to json")
 	}
 
 	// Compute the merge patch that will align the original object to the target
-	// state defined above; this patch overrides the two-way merge patch for the
-	// authoritative paths, if any.
+	// state defined above; this patch overrides the two-way merge patch for both the
+	// authoritative and the managed paths, if any.
 	var authoritativePatch []byte
-	if helperOptions.authoritativePaths != nil {
+	if len(helperOptions.authoritativePaths) > 0 || len(helperOptions.managedPaths) > 0 {
 		authoritativePatch, err = jsonpatch.CreateMergePatch(originalJSON, modifiedJSON)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create merge patch for authoritative paths")
@@ -125,7 +136,7 @@ type applyPathOptionsOutput struct {
 }
 
 // applyPathOptions applies all the options acting on path level; currently it removes from the patch diffs not
-// in the allowed paths, filters out path to be ignored and enforce authoritative paths.
+// in the allowed paths, filters out path to be ignored and enforce authoritative and managed paths.
 // It also returns a flag indicating if the resulting patch has spec changes or not.
 func applyPathOptions(in *applyPathOptionsInput) (*applyPathOptionsOutput, error) {
 	twoWayPatchMap := make(map[string]interface{})
@@ -133,17 +144,17 @@ func applyPathOptions(in *applyPathOptionsInput) (*applyPathOptionsOutput, error
 		return nil, errors.Wrap(err, "failed to unmarshal two way merge patch")
 	}
 
-	// Enforce changes from the authoritative patch when required.
+	// Enforce changes from authoritative patch when required (authoritative and managed paths).
 	// This will override instance specific fields for a subset of fields,
 	// e.g. machine template metadata changes should be reflected into generated objects without
 	// accounting for instance specific changes like we do for other maps into spec.
-	if len(in.options.authoritativePaths) > 0 {
+	if len(in.options.authoritativePaths) > 0 || len(in.options.managedPaths) > 0 {
 		authoritativePatchMap := make(map[string]interface{})
 		if err := json.Unmarshal(in.authoritativePatch, &authoritativePatchMap); err != nil {
 			return nil, errors.Wrap(err, "failed to unmarshal authoritative merge patch")
 		}
 
-		for _, path := range in.options.authoritativePaths {
+		for _, path := range append(in.options.managedPaths, in.options.authoritativePaths...) {
 			enforcePath(authoritativePatchMap, twoWayPatchMap, path)
 		}
 	}
