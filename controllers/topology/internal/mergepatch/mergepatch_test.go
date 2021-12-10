@@ -642,8 +642,8 @@ func TestNewHelper(t *testing.T) {
 				Object: map[string]interface{}{},
 			},
 			wantHasChanges:     true,
-			wantHasSpecChanges: false,
-			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+			wantHasSpecChanges: true,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}},\"spec\":{\"something\":{\"from\":{\"a\":{\"previous\":{\"reconcile\":null}}}}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
 		},
 		{
 			name: "Managed field annotation does not include ignored paths - exact match",
@@ -686,35 +686,206 @@ func TestNewHelper(t *testing.T) {
 			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
 		},
 		{
-			name: "Changes for managed fields are authoritative",
-			original: &unstructured.Unstructured{ // current
+			name: "changes to managed field are applied",
+			original: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"annotations": map[string]interface{}{
-							clusterv1.ClusterTopologyManagedFieldsAnnotation: "foo.bar",
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
 						},
 					},
 					"spec": map[string]interface{}{
-						"foo": map[string]interface{}{
-							"bar": "",
-							"baz": int64(0),
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "true",  // managed field previously set by a template
+										"enable-garbage-collector":    "false", // user added field (should not be changed)
+									},
+								},
+							},
 						},
 					},
 				},
 			},
-			modified: &unstructured.Unstructured{ // desired
+			modified: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"spec": map[string]interface{}{
-						"foo": map[string]interface{}{
-							// bar is not part of the modified object; given it is a managed field (set by the topology controller on a previous reconcile), it should be removed from the result.
-							// baz is not part of the modified object; given it is not a managed field it should be treated as a user defined field and left into the result.
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "false",
+									},
+								},
+							},
 						},
 					},
 				},
 			},
 			wantHasChanges:     true,
 			wantHasSpecChanges: true,
-			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}},\"spec\":{\"foo\":{\"bar\":null}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+			wantPatch:          []byte("{\"spec\":{\"kubeadmConfigSpec\":{\"clusterConfiguration\":{\"controllerManager\":{\"extraArgs\":{\"enable-hostpath-provisioner\":\"false\"}}}}}}"),
+		},
+		{
+			name: "changes managed field to null is applied",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": map[string]interface{}{
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+					},
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "true",  // managed field previously set by a template
+										"enable-garbage-collector":    "false", // user added field (should not be changed)
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			modified: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": nil,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+			wantPatch:          []byte("{\"spec\":{\"kubeadmConfigSpec\":{\"clusterConfiguration\":{\"controllerManager\":{\"extraArgs\":{\"enable-hostpath-provisioner\":null}}}}}}"),
+		},
+		{
+			name: "dropping managed field trigger deletion; field should not be managed anymore",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": map[string]interface{}{
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+					},
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "true",  // managed field previously set by a template (it is going to be dropped)
+										"enable-garbage-collector":    "false", // user added field (should not be changed)
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			modified: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}},\"spec\":{\"kubeadmConfigSpec\":{\"clusterConfiguration\":{\"controllerManager\":{\"extraArgs\":{\"enable-hostpath-provisioner\":null}}}}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+		},
+		{
+			name: "changes managed object (a field with nested fields) to null is applied; managed field is updated accordingly",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": map[string]interface{}{
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+					},
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "true",  // managed field previously set by a template (it is going to be dropped given that modified is providing an opinion on a parent object)
+										"enable-garbage-collector":    "false", // user added field (it is going to be dropped given that modified is providing an opinion on a parent object)
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			modified: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": nil,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs\"}},\"spec\":{\"kubeadmConfigSpec\":{\"clusterConfiguration\":{\"controllerManager\":{\"extraArgs\":null}}}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
+		},
+		{
+			name: "dropping managed object (a field with nested fields) to null is applied; managed field is updated accordingly",
+			original: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"annotations": map[string]interface{}{
+							clusterv1.ClusterTopologyManagedFieldsAnnotation: "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+					},
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{
+									"extraArgs": map[string]interface{}{
+										"enable-hostpath-provisioner": "true",  // managed field previously set by a template (it is going to be dropped given that modified is dropping the parent object)
+										"enable-garbage-collector":    "false", // user added field (should be preserved)
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			modified: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"kubeadmConfigSpec": map[string]interface{}{
+							"clusterConfiguration": map[string]interface{}{
+								"controllerManager": map[string]interface{}{},
+							},
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+			wantPatch:          []byte(fmt.Sprintf("{\"metadata\":{\"annotations\":{\"%s\":\"\"}},\"spec\":{\"kubeadmConfigSpec\":{\"clusterConfiguration\":{\"controllerManager\":{\"extraArgs\":{\"enable-hostpath-provisioner\":null}}}}}}", clusterv1.ClusterTopologyManagedFieldsAnnotation)),
 		},
 
 		// More tests
@@ -982,6 +1153,7 @@ func Test_enforcePath(t *testing.T) {
 	tests := []struct {
 		name             string
 		authoritativeMap map[string]interface{}
+		modified         map[string]interface{}
 		twoWaysMap       map[string]interface{}
 		path             contract.Path
 		want             map[string]interface{}
@@ -1074,16 +1246,6 @@ func Test_enforcePath(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "Ignore partial match",
-			authoritativeMap: map[string]interface{}{
-				"foo": "a",
-			},
-			twoWaysMap: map[string]interface{}{},
-			path:       contract.Path([]string{"foo", "bar", "baz"}),
-			want:       map[string]interface{}{},
-		},
-
 		{
 			name: "authoritative has no changes, twoWays has no changes, no changes",
 			authoritativeMap: map[string]interface{}{
@@ -1213,12 +1375,78 @@ func Test_enforcePath(t *testing.T) {
 			path: contract.Path([]string{"spec", "template", "metadata"}),
 			want: map[string]interface{}{},
 		},
+		{
+			name: "authoritative sets to null a parent object and the change is intentional (parent null in modified).",
+			authoritativeMap: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							"extraArgs": nil, // extra arg is a parent object in the authoritative path
+						},
+					},
+				},
+			},
+			modified: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							"extraArgs": nil, // extra arg has been explicitly set to null
+						},
+					},
+				},
+			},
+			twoWaysMap: map[string]interface{}{},
+			path:       contract.Path([]string{"kubeadmConfigSpec", "clusterConfiguration", "controllerManager", "extraArgs", "enable-hostpath-provisioner"}),
+			want: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							"extraArgs": nil,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "authoritative sets to null a parent object and the change is a consequence of the object being dropped (parent does not exists in modified).",
+			authoritativeMap: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							"extraArgs": nil, // extra arg is a parent object in the authoritative path
+						},
+					},
+				},
+			},
+			modified: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							// extra arg has been dropped from modified
+						},
+					},
+				},
+			},
+			twoWaysMap: map[string]interface{}{},
+			path:       contract.Path([]string{"kubeadmConfigSpec", "clusterConfiguration", "controllerManager", "extraArgs", "enable-hostpath-provisioner"}),
+			want: map[string]interface{}{
+				"kubeadmConfigSpec": map[string]interface{}{
+					"clusterConfiguration": map[string]interface{}{
+						"controllerManager": map[string]interface{}{
+							"extraArgs": map[string]interface{}{
+								"enable-hostpath-provisioner": nil,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			enforcePath(tt.authoritativeMap, tt.twoWaysMap, tt.path)
+			enforcePath(tt.authoritativeMap, tt.modified, tt.twoWaysMap, tt.path)
 
 			g.Expect(tt.twoWaysMap).To(Equal(tt.want))
 		})

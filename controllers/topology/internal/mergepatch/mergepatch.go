@@ -109,6 +109,7 @@ func NewHelper(original, modified client.Object, c client.Client, opts ...Helper
 	// changes for metadata fields computed by the system or changes to the  status.
 	ret, err := applyPathOptions(&applyPathOptionsInput{
 		authoritativePatch: authoritativePatch,
+		modified:           modifiedJSON,
 		twoWayPatch:        twoWayPatch,
 		options:            helperOptions,
 	})
@@ -127,6 +128,7 @@ func NewHelper(original, modified client.Object, c client.Client, opts ...Helper
 type applyPathOptionsInput struct {
 	authoritativePatch []byte
 	twoWayPatch        []byte
+	modified           []byte
 	options            *HelperOptions
 }
 
@@ -154,8 +156,13 @@ func applyPathOptions(in *applyPathOptionsInput) (*applyPathOptionsOutput, error
 			return nil, errors.Wrap(err, "failed to unmarshal authoritative merge patch")
 		}
 
+		modifiedMap := make(map[string]interface{})
+		if err := json.Unmarshal(in.modified, &modifiedMap); err != nil {
+			return nil, errors.Wrap(err, "failed to unmarshal modified")
+		}
+
 		for _, path := range append(in.options.managedPaths, in.options.authoritativePaths...) {
-			enforcePath(authoritativePatchMap, twoWayPatchMap, path)
+			enforcePath(authoritativePatchMap, modifiedMap, twoWayPatchMap, path)
 		}
 	}
 
@@ -251,7 +258,7 @@ func removePath(patchMap map[string]interface{}, path contract.Path) {
 
 // enforcePath enforces a path from authoritativeMap into the twoWayMap thus
 // enforcing changes aligned to the modified object for the authoritative paths.
-func enforcePath(authoritative, twoWay map[string]interface{}, path contract.Path) {
+func enforcePath(authoritative, modified, twoWay map[string]interface{}, path contract.Path) {
 	switch len(path) {
 	case 0:
 		// If path is empty, no-op.
@@ -270,11 +277,24 @@ func enforcePath(authoritative, twoWay map[string]interface{}, path contract.Pat
 
 	default:
 		// If in the middle of a path, go into the nested map,
-		nestedSimpleMap, ok := authoritative[path[0]].(map[string]interface{})
+		var nestedSimpleMap map[string]interface{}
+		switch v, ok := authoritative[path[0]]; {
+		case ok && v == nil:
+			// If the nested map is nil, it means that the authoritative patch is trying to delete a parent object
+			// in the middle of the enforced path.
 
-		// If the value is not a map (is a value or a list), return (not a full match).
-		if !ok {
-			return
+			// If the parent object has been intentionally deleted (the corresponding parent object value in the modified object is null),
+			// then we should enforce the deletion of the parent object including everything below it.
+			if _, ok := modified[path[0]]; ok && v == nil {
+				twoWay[path[0]] = nil
+				return
+			}
+
+			// Otherwise, we continue processing the enforced path, thus deleting only what
+			// is explicitly enforced.
+			nestedSimpleMap = map[string]interface{}{path[1]: nil}
+		default:
+			nestedSimpleMap, _ = v.(map[string]interface{})
 		}
 
 		// Get the corresponding map in the two-way patch.
@@ -285,8 +305,11 @@ func enforcePath(authoritative, twoWay map[string]interface{}, path contract.Pat
 			twoWay[path[0]] = nestedTwoWayMap
 		}
 
+		// Get the corresponding value in modified.
+		nestedModified, _ := modified[path[0]].(map[string]interface{})
+
 		// Enforce the nested path.
-		enforcePath(nestedSimpleMap, nestedTwoWayMap, path[1:])
+		enforcePath(nestedSimpleMap, nestedModified, nestedTwoWayMap, path[1:])
 
 		// Ensure we are not leaving empty maps around.
 		if len(nestedTwoWayMap) == 0 {
