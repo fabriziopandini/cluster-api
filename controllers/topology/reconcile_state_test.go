@@ -17,14 +17,17 @@ limitations under the License.
 package topology
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -33,6 +36,7 @@ import (
 	"sigs.k8s.io/cluster-api/controllers/topology/internal/scope"
 	"sigs.k8s.io/cluster-api/internal/builder"
 	. "sigs.k8s.io/cluster-api/internal/matchers"
+	"sigs.k8s.io/cluster-api/util/patch"
 )
 
 var (
@@ -401,6 +405,540 @@ func TestReconcileInfrastructureCluster(t *testing.T) {
 			g.Expect(ok).To(BeTrue())
 			for k, v := range wantSpec {
 				g.Expect(gotSpec).To(HaveKeyWithValue(k, v))
+			}
+		})
+	}
+}
+
+// TestReconcileRepeatedly tests multiple subsequent reconciles to verify that
+// the objects are reconciled as expected by tracking managed fields correctly.
+func TestReconcileRepeatedly(t *testing.T) {
+	type object struct {
+		annotations map[string]interface{}
+		spec        map[string]interface{}
+	}
+	type userStep struct {
+		name   string
+		object object
+	}
+	type reconcileStep struct {
+		name    string
+		desired object
+		want    object
+	}
+
+	tests := []struct {
+		name           string
+		reconcileSteps []interface{}
+	}{
+		{
+			name: "Should drop nested field",
+			reconcileSteps: []interface{}{
+				reconcileStep{
+					name: "Initially reconcile KCP",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											"enable-hostpath-provisioner": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											"enable-hostpath-provisioner": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "Drop enable-hostpath-provisioner",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									// enable-hostpath-provisioner has been removed and extraArgs with it.
+									"controllerManager": map[string]interface{}{},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "",
+						},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										// To drop enable-hostpath-provisioner, extraArgs is set to an empty object.
+										"extraArgs": map[string]interface{}{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Should drop label",
+			reconcileSteps: []interface{}{
+				reconcileStep{
+					name: "Initially reconcile KCP",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"machineTemplate": map[string]interface{}{
+								"metadata": map[string]interface{}{
+									"labels": map[string]interface{}{
+										"label.with.dots/owned": "true",
+										"anotherLabel":          "true",
+									},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "machineTemplate.metadata.labels.anotherLabel, machineTemplate.metadata.labels.label.with.dots/owned",
+						},
+						spec: map[string]interface{}{
+							"machineTemplate": map[string]interface{}{
+								"metadata": map[string]interface{}{
+									"labels": map[string]interface{}{
+										"label.with.dots/owned": "true",
+										"anotherLabel":          "true",
+									},
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "Drop the label with dots",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"machineTemplate": map[string]interface{}{
+								"metadata": map[string]interface{}{
+									"labels": map[string]interface{}{
+										"anotherLabel": "true",
+									},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "machineTemplate.metadata.labels.anotherLabel",
+						},
+						spec: map[string]interface{}{
+							"machineTemplate": map[string]interface{}{
+								"metadata": map[string]interface{}{
+									"labels": map[string]interface{}{
+										"anotherLabel": "true",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Should enforce field",
+			reconcileSteps: []interface{}{
+				reconcileStep{
+					name: "Initially reconcile",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"stringField": "ccValue",
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "stringField",
+						},
+						spec: map[string]interface{}{
+							"stringField": "ccValue",
+						},
+					},
+				},
+				userStep{
+					name: "User changes value",
+					object: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "stringField",
+						},
+						spec: map[string]interface{}{
+							"stringField": "userValue",
+						},
+					},
+				},
+				reconcileStep{
+					name: "Reconcile overwrites value",
+					desired: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "stringField",
+						},
+						spec: map[string]interface{}{
+							"stringField": "ccValue",
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "stringField",
+						},
+						spec: map[string]interface{}{
+							"stringField": "ccValue",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Should preserve user-defined field while dropping managed field",
+			reconcileSteps: []interface{}{
+				reconcileStep{
+					name: "Initially reconcile KCP",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											"enable-hostpath-provisioner": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											"enable-hostpath-provisioner": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				userStep{
+					name: "User adds an additional extraArg",
+					object: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "kubeadmConfigSpec.clusterConfiguration.controllerManager.extraArgs.enable-hostpath-provisioner",
+						},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											"enable-hostpath-provisioner": "true",
+											// User adds enable-garbage-collector.
+											"enable-garbage-collector": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "Previously set extraArgs is dropped from KCP, user-specified field is preserved.",
+					desired: object{
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									// enable-hostpath-provisioner has been removed and extraArgs with it.
+									"controllerManager": map[string]interface{}{},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "",
+						},
+						spec: map[string]interface{}{
+							"kubeadmConfigSpec": map[string]interface{}{
+								"clusterConfiguration": map[string]interface{}{
+									"controllerManager": map[string]interface{}{
+										"extraArgs": map[string]interface{}{
+											// Managed field enable-hostpath-provisioner has been dropped,
+											// while preserving user-defined enable-garbage-collector field.
+											"enable-garbage-collector": "true",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Should preserve user-defined object field while dropping managed fields",
+			reconcileSteps: []interface{}{
+				reconcileStep{
+					name: "Initially reconcile",
+					desired: object{
+						annotations: map[string]interface{}{},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "",
+						},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{},
+							},
+						},
+					},
+				},
+				userStep{
+					name: "User adds an additional object",
+					object: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "",
+						},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"userDefinedObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "ClusterClass starts having an opinion about some fields",
+					desired: object{
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"clusterClassObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+									"clusterClassField": true,
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "template.spec.clusterClassField, template.spec.clusterClassObject.boolField, template.spec.clusterClassObject.stringField",
+						},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"userDefinedObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+									"clusterClassObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+									"clusterClassField": true,
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "ClusterClass stops having an opinion on the field",
+					desired: object{
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"clusterClassObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+								},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "template.spec.clusterClassObject.boolField, template.spec.clusterClassObject.stringField",
+						},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"userDefinedObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+									"clusterClassObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+								},
+							},
+						},
+					},
+				},
+				reconcileStep{
+					name: "ClusterClass stops having an opinion on the object",
+					desired: object{
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{},
+							},
+						},
+					},
+					want: object{
+						annotations: map[string]interface{}{
+							"topology.cluster.x-k8s.io/managed-fields": "",
+						},
+						spec: map[string]interface{}{
+							"template": map[string]interface{}{
+								"spec": map[string]interface{}{
+									"userDefinedObject": map[string]interface{}{
+										"boolField":   true,
+										"stringField": "def",
+									},
+									"clusterClassObject": map[string]interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			fakeClient := fake.NewClientBuilder().WithScheme(fakeScheme).Build()
+			r := ClusterReconciler{
+				Client: fakeClient,
+				// NOTE: Intentionally using a fake recorder, so the test can also be run without testenv.
+				recorder: record.NewFakeRecorder(32),
+			}
+
+			s := scope.New(&clusterv1.Cluster{})
+			s.Blueprint = &scope.ClusterBlueprint{
+				ClusterClass: &clusterv1.ClusterClass{},
+			}
+
+			for i, step := range tt.reconcileSteps {
+				var currentControlPlane *unstructured.Unstructured
+
+				// Get current ControlPlane (on later steps).
+				if i > 0 {
+					currentControlPlane = &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"kind":       "KubeadmControlPlane",
+							"apiVersion": "controlplane.cluster.x-k8s.io/v1beta1",
+						},
+					}
+					g.Expect(fakeClient.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceDefault, Name: "my-cluster"}, currentControlPlane)).To(Succeed())
+				}
+
+				if step, ok := step.(userStep); ok {
+					// This is a user step, so let's just update the object.
+					patchHelper, err := patch.NewHelper(currentControlPlane, fakeClient)
+					g.Expect(err).ToNot(HaveOccurred())
+
+					g.Expect(unstructured.SetNestedField(currentControlPlane.Object, step.object.annotations, "metadata", "annotations")).To(Succeed())
+					g.Expect(unstructured.SetNestedField(currentControlPlane.Object, step.object.spec, "spec")).To(Succeed())
+					g.Expect(patchHelper.Patch(context.Background(), currentControlPlane)).To(Succeed())
+					continue
+				}
+
+				if step, ok := step.(reconcileStep); ok {
+					// This is a reconcile step, so let's trigger a reconcile and then validate the result.
+
+					// Set the current control plane.
+					s.Current.ControlPlane = &scope.ControlPlaneState{
+						Object: currentControlPlane,
+					}
+					// Set the desired control plane.
+					s.Desired = &scope.ClusterState{
+						ControlPlane: &scope.ControlPlaneState{
+							Object: &unstructured.Unstructured{
+								Object: map[string]interface{}{
+									"kind":       "KubeadmControlPlane",
+									"apiVersion": "controlplane.cluster.x-k8s.io/v1beta1",
+									"metadata": map[string]interface{}{
+										"name":        "my-cluster",
+										"namespace":   metav1.NamespaceDefault,
+										"annotations": step.desired.annotations,
+									},
+									"spec": step.desired.spec,
+								},
+							},
+						},
+					}
+
+					// Execute a reconcile.
+					g.Expect(r.reconcileControlPlane(ctx, s)).To(Succeed())
+
+					// Build the object for comparison.
+					want := &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"kind":       "KubeadmControlPlane",
+							"apiVersion": "controlplane.cluster.x-k8s.io/v1beta1",
+							"metadata": map[string]interface{}{
+								"name":        "my-cluster",
+								"namespace":   metav1.NamespaceDefault,
+								"annotations": step.want.annotations,
+							},
+							"spec": step.want.spec,
+						},
+					}
+
+					// Get the reconciled object.
+					got := want.DeepCopy() // this is required otherwise Get will modify tt.want
+					g.Expect(fakeClient.Get(ctx, client.ObjectKey{Namespace: metav1.NamespaceDefault, Name: "my-cluster"}, got)).To(Succeed())
+
+					// Compare want with got.
+					g.Expect(got).To(EqualObject(want, IgnorePaths{[]string{"metadata", "resourceVersion"}}), fmt.Sprintf("Step %q failed: %v", step.name, cmp.Diff(want, got)))
+					continue
+				}
+
+				panic(fmt.Errorf("unknown step type %T", step))
 			}
 		})
 	}
