@@ -376,6 +376,8 @@ func TestComputeControlPlane(t *testing.T) {
 			"name":       infrastructureMachineTemplate.GetName(),
 			"apiVersion": infrastructureMachineTemplate.GetAPIVersion(),
 		}, contract.ControlPlane().MachineTemplate().InfrastructureRef().Path()...)
+
+		g.Expect(infrastructureMachineTemplate.GetAnnotations()).To(HaveKey(clusterv1.ClusterTopologyKubernetesVersionAnnotation))
 	})
 	t.Run("If there is already a reference to the ControlPlane, it preserves the reference name", func(t *testing.T) {
 		g := NewWithT(t)
@@ -769,6 +771,7 @@ func TestComputeMachineDeployment(t *testing.T) {
 		g.Expect(err).ToNot(HaveOccurred())
 
 		g.Expect(actual.BootstrapTemplate.GetLabels()).To(HaveKeyWithValue(clusterv1.ClusterTopologyMachineDeploymentLabelName, "big-pool-of-machines"))
+		g.Expect(actual.BootstrapTemplate.GetAnnotations()).To(HaveKey(clusterv1.ClusterTopologyKubernetesVersionAnnotation))
 
 		// Ensure Cluster ownership is added to generated BootstrapTemplate.
 		g.Expect(actual.BootstrapTemplate.GetOwnerReferences()).To(HaveLen(1))
@@ -776,6 +779,7 @@ func TestComputeMachineDeployment(t *testing.T) {
 		g.Expect(actual.BootstrapTemplate.GetOwnerReferences()[0].Name).To(Equal(cluster.Name))
 
 		g.Expect(actual.InfrastructureMachineTemplate.GetLabels()).To(HaveKeyWithValue(clusterv1.ClusterTopologyMachineDeploymentLabelName, "big-pool-of-machines"))
+		g.Expect(actual.InfrastructureMachineTemplate.GetAnnotations()).To(HaveKey(clusterv1.ClusterTopologyKubernetesVersionAnnotation))
 
 		// Ensure Cluster ownership is added to generated InfrastructureMachineTemplate.
 		g.Expect(actual.InfrastructureMachineTemplate.GetOwnerReferences()).To(HaveLen(1))

@@ -175,12 +175,26 @@ func computeControlPlane(_ context.Context, s *scope.Scope, infrastructureMachin
 		return nil, errors.Wrapf(err, "failed to generate the ControlPlane object from the %s", template.GetKind())
 	}
 
+	// Compute the desired version for the control plane.
+	version, err := computeControlPlaneVersion(s)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to compute version of control plane")
+	}
+
 	// If the ClusterClass mandates the controlPlane has infrastructureMachines, add a reference to InfrastructureMachine
 	// template and metadata to be used for the control plane machines.
 	if s.Blueprint.HasControlPlaneInfrastructureMachine() {
 		if err := contract.ControlPlane().MachineTemplate().InfrastructureRef().Set(controlPlane, infrastructureMachineTemplate); err != nil {
 			return nil, errors.Wrap(err, "failed to spec.machineTemplate.infrastructureRef in the ControlPlane object")
 		}
+
+		// Add the managed version annotation to the infrastructureMachineTemplate.
+		infrastructureMachineTemplateAnnotations := infrastructureMachineTemplate.GetAnnotations()
+		if infrastructureMachineTemplateAnnotations == nil {
+			infrastructureMachineTemplateAnnotations = map[string]string{}
+		}
+		infrastructureMachineTemplateAnnotations[clusterv1.ClusterTopologyKubernetesVersionAnnotation] = version
+		infrastructureMachineTemplate.SetAnnotations(infrastructureMachineTemplateAnnotations)
 
 		// Compute the labels and annotations to be applied to ControlPlane machines.
 		// We merge the labels and annotations from topology and ClusterClass.
@@ -213,10 +227,6 @@ func computeControlPlane(_ context.Context, s *scope.Scope, infrastructureMachin
 	}
 
 	// Sets the desired Kubernetes version for the control plane.
-	version, err := computeControlPlaneVersion(s)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to compute version of control plane")
-	}
 	if err := contract.ControlPlane().Version().Set(controlPlane, version); err != nil {
 		return nil, errors.Wrap(err, "failed to set spec.version in the ControlPlane object")
 	}
@@ -367,8 +377,14 @@ func computeMachineDeployment(_ context.Context, s *scope.Scope, desiredControlP
 		return nil, errors.Errorf("MachineDeployment class %s not found in %s", className, tlog.KObj{Obj: s.Blueprint.ClusterClass})
 	}
 
-	// Compute the boostrap template.
+	// Compute the desired version for the machine deployment
 	currentMachineDeployment := s.Current.MachineDeployments[machineDeploymentTopology.Name]
+	version, err := computeMachineDeploymentVersion(s, desiredControlPlaneState, currentMachineDeployment)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to compute version for %s", machineDeploymentTopology.Name)
+	}
+
+	// Compute the boostrap template.
 	var currentBootstrapTemplateRef *corev1.ObjectReference
 	if currentMachineDeployment != nil && currentMachineDeployment.BootstrapTemplate != nil {
 		currentBootstrapTemplateRef = currentMachineDeployment.Object.Spec.Template.Spec.Bootstrap.ConfigRef
@@ -392,6 +408,14 @@ func computeMachineDeployment(_ context.Context, s *scope.Scope, desiredControlP
 	// Add ClusterTopologyMachineDeploymentLabel to the generated Bootstrap template
 	bootstrapTemplateLabels[clusterv1.ClusterTopologyMachineDeploymentLabelName] = machineDeploymentTopology.Name
 	desiredMachineDeployment.BootstrapTemplate.SetLabels(bootstrapTemplateLabels)
+
+	bootstrapTemplateAnnotations := desiredMachineDeployment.BootstrapTemplate.GetAnnotations()
+	if bootstrapTemplateAnnotations == nil {
+		bootstrapTemplateAnnotations = map[string]string{}
+	}
+	// Add the managed version annotation to the BootstrapTemplate.
+	bootstrapTemplateAnnotations[clusterv1.ClusterTopologyKubernetesVersionAnnotation] = version
+	desiredMachineDeployment.BootstrapTemplate.SetAnnotations(bootstrapTemplateAnnotations)
 
 	// Compute the Infrastructure template.
 	var currentInfraMachineTemplateRef *corev1.ObjectReference
@@ -417,10 +441,14 @@ func computeMachineDeployment(_ context.Context, s *scope.Scope, desiredControlP
 	// Add ClusterTopologyMachineDeploymentLabel to the generated InfrastructureMachine template
 	infraMachineTemplateLabels[clusterv1.ClusterTopologyMachineDeploymentLabelName] = machineDeploymentTopology.Name
 	desiredMachineDeployment.InfrastructureMachineTemplate.SetLabels(infraMachineTemplateLabels)
-	version, err := computeMachineDeploymentVersion(s, desiredControlPlaneState, currentMachineDeployment)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to compute version for %s", machineDeploymentTopology.Name)
+
+	infraMachineTemplateAnnotations := desiredMachineDeployment.InfrastructureMachineTemplate.GetAnnotations()
+	if infraMachineTemplateAnnotations == nil {
+		infraMachineTemplateAnnotations = map[string]string{}
 	}
+	// Add the managed version annotation to the InfrastructureMachineTemplate.
+	infraMachineTemplateAnnotations[clusterv1.ClusterTopologyKubernetesVersionAnnotation] = version
+	desiredMachineDeployment.InfrastructureMachineTemplate.SetAnnotations(infraMachineTemplateAnnotations)
 
 	// Compute the MachineDeployment object.
 	gv := clusterv1.GroupVersion

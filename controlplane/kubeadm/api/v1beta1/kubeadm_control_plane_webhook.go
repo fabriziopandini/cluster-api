@@ -29,6 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	tkr2 "sigs.k8s.io/cluster-api/util/tkr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -51,6 +53,25 @@ var _ webhook.Validator = &KubeadmControlPlane{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type.
 func (in *KubeadmControlPlane) Default() {
+	// ********************
+
+	controlPlane := in
+
+	// if the object is part of a managed cluster
+	if _, ok := controlPlane.Labels[clusterv1.ClusterTopologyOwnedLabel]; ok {
+
+		// TODO: get corresponding cluster, check if tkr resolution is required for this Cluster/KubeadmControlPlane
+
+		// NOTE: we are resolving TKR for cluster.spec.version, given that it might be different from the
+		// cluster.topology.version during an upgrade sequence.
+		tkr := tkr2.ResolveFor(controlPlane.Spec.Version)
+
+		// Add node labels
+		controlPlane.Spec.KubeadmConfigSpec.SetNodeLabels(&tkr)
+	}
+
+	// ********************
+
 	defaultKubeadmControlPlaneSpec(&in.Spec, in.Namespace)
 }
 

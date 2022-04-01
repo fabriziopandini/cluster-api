@@ -23,6 +23,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	tkr2 "sigs.k8s.io/cluster-api/util/tkr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
@@ -35,9 +37,34 @@ func (m *DockerMachineTemplate) SetupWebhookWithManager(mgr ctrl.Manager) error 
 		Complete()
 }
 
+// +kubebuilder:webhook:verbs=create;update,path=/mutate-infrastructure-cluster-x-k8s-io-v1beta1-dockermachinetemplate,mutating=true,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=dockermachinetemplates,versions=v1beta1,name=default.dockermachinetemplate.infrastructure.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
 // +kubebuilder:webhook:verbs=create;update,path=/validate-infrastructure-cluster-x-k8s-io-v1beta1-dockermachinetemplate,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=dockermachinetemplates,versions=v1beta1,name=validation.dockermachinetemplate.infrastructure.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1;v1beta1
 
+var _ webhook.Defaulter = &DockerMachineTemplate{}
 var _ webhook.Validator = &DockerMachineTemplate{}
+
+func (m *DockerMachineTemplate) Default() {
+	// ****
+	template := m
+
+	// if the object is part of a managed cluster
+	if _, ok := template.Labels[clusterv1.ClusterTopologyOwnedLabel]; ok {
+
+		// TODO: get corresponding cluster, check if tkr resolution is required for this Cluster/KubeadmControlPlane
+
+		// NOTE: we are resolving TKR for owner-version, given that it might be different from the
+		// cluster.topology.version during an upgrade sequence.
+		version, ok := template.Annotations[clusterv1.ClusterTopologyKubernetesVersionAnnotation]
+		if !ok {
+			return
+		}
+		tkr := tkr2.ResolveFor(version)
+
+		// Set machine image
+		template.Spec.Template.Spec.CustomImage = tkr.MachineImage
+	}
+	// ****
+}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type.
 func (m *DockerMachineTemplate) ValidateCreate() error {

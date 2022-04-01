@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	tkr2 "sigs.k8s.io/cluster-api/util/tkr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -63,6 +64,30 @@ func (webhook *Cluster) Default(ctx context.Context, obj runtime.Object) error {
 	if !ok {
 		return apierrors.NewBadRequest(fmt.Sprintf("expected a Cluster but got a %T", obj))
 	}
+
+	// ****************
+
+	if cluster.Spec.Topology != nil {
+		// TODO: check if tkr resolution is required for this cluster
+
+		tkr := tkr2.ResolveFor(cluster.Spec.Topology.Version)
+
+		// Set annotations on the CP
+		if cluster.Spec.Topology.ControlPlane.Metadata.Annotations == nil {
+			cluster.Spec.Topology.ControlPlane.Metadata.Annotations = map[string]string{}
+		}
+		tkr.SetTopologyAnnotations(cluster.Spec.Topology.ControlPlane.Metadata.Annotations)
+
+		// Set annotations on the MD
+		for i := range cluster.Spec.Topology.Workers.MachineDeployments {
+			if cluster.Spec.Topology.Workers.MachineDeployments[i].Metadata.Annotations == nil {
+				cluster.Spec.Topology.Workers.MachineDeployments[i].Metadata.Annotations = map[string]string{}
+			}
+			tkr.SetTopologyAnnotations(cluster.Spec.Topology.Workers.MachineDeployments[i].Metadata.Annotations)
+		}
+	}
+
+	// ****************
 
 	if cluster.Spec.InfrastructureRef != nil && cluster.Spec.InfrastructureRef.Namespace == "" {
 		cluster.Spec.InfrastructureRef.Namespace = cluster.Namespace

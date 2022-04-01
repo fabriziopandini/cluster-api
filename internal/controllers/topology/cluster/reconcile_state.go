@@ -693,7 +693,16 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 
 	// If there are no changes in the spec, and thus only changes in metadata, instead of doing a full template
 	// rotation we patch the object in place. This avoids recreating machines.
-	if !patchHelper.HasSpecChanges() {
+	currentV := ""
+	if in.current.GetAnnotations() != nil {
+		currentV = in.current.GetAnnotations()[clusterv1.ClusterTopologyKubernetesVersionAnnotation]
+	}
+	desiredV := ""
+	if in.desired.GetAnnotations() != nil {
+		desiredV = in.desired.GetAnnotations()[clusterv1.ClusterTopologyKubernetesVersionAnnotation]
+	}
+
+	if !patchHelper.HasSpecChanges() && currentV == desiredV {
 		log.Infof("Patching %s", tlog.KObj{Obj: in.desired})
 		if err := patchHelper.Patch(ctx); err != nil {
 			return errors.Wrapf(err, "failed to patch %s", tlog.KObj{Obj: in.desired})

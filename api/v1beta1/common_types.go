@@ -42,6 +42,8 @@ const (
 	// given that the topology controller explicitly sets a well-known, immutable list of fields at every reconcile.
 	ClusterTopologyManagedFieldsAnnotation = "topology.cluster.x-k8s.io/managed-field-paths"
 
+	ClusterTopologyKubernetesVersionAnnotation = "topology.cluster.x-k8s.io/owner-version"
+
 	// ClusterTopologyMachineDeploymentLabelName is the label set on the generated  MachineDeployment objects
 	// to track the name of the MachineDeployment topology it represents.
 	ClusterTopologyMachineDeploymentLabelName = "topology.cluster.x-k8s.io/deployment-name"

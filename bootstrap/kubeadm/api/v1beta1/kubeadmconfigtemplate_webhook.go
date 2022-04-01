@@ -20,6 +20,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	tkr2 "sigs.k8s.io/cluster-api/util/tkr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
@@ -36,6 +38,29 @@ var _ webhook.Defaulter = &KubeadmConfigTemplate{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type.
 func (r *KubeadmConfigTemplate) Default() {
+
+	// ********************
+	template := r
+
+	// if the object is part of a managed cluster
+	if _, ok := template.Labels[clusterv1.ClusterTopologyOwnedLabel]; ok {
+
+		// TODO: get corresponding cluster, check if tkr resolution is required for this Cluster/KubeadmControlPlane
+
+		// NOTE: we are resolving TKR for owner-version, given that it might be different from the
+		// cluster.topology.version during an upgrade sequence.
+		version, ok := template.Annotations[clusterv1.ClusterTopologyKubernetesVersionAnnotation]
+		if !ok {
+			// handle error
+		}
+		tkr := tkr2.ResolveFor(version)
+
+		// Add node labels
+		template.Spec.Template.Spec.SetNodeLabels(&tkr)
+	}
+
+	// ********************
+
 	DefaultKubeadmConfigSpec(&r.Spec.Template.Spec)
 }
 

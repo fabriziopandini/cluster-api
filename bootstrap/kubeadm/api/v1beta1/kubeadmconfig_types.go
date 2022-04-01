@@ -17,7 +17,10 @@ limitations under the License.
 package v1beta1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/cluster-api/util/tkr"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
@@ -102,6 +105,30 @@ type KubeadmConfigSpec struct {
 	// Ignition contains Ignition specific configuration.
 	// +optional
 	Ignition *IgnitionSpec `json:"ignition,omitempty"`
+}
+
+func (kubeadmConfigSpec *KubeadmConfigSpec) SetNodeLabels(tkr *tkr.Info) {
+	addLabels := func(extraArgs map[string]string) {
+		extraArgs["cgroup-driver"] = "cgroupfs"
+		extraArgs["eviction-hard"] = "nodefs.available<0%,nodefs.inodesFree<0%,imagefs.available<0%"
+		extraArgs["node-labels"] = fmt.Sprintf("tkr-version=%s", tkr.TkrId)
+	}
+
+	if kubeadmConfigSpec.InitConfiguration == nil {
+		kubeadmConfigSpec.InitConfiguration = &InitConfiguration{}
+	}
+	if kubeadmConfigSpec.InitConfiguration.NodeRegistration.KubeletExtraArgs == nil {
+		kubeadmConfigSpec.InitConfiguration.NodeRegistration.KubeletExtraArgs = map[string]string{}
+	}
+	addLabels(kubeadmConfigSpec.InitConfiguration.NodeRegistration.KubeletExtraArgs)
+
+	if kubeadmConfigSpec.JoinConfiguration == nil {
+		kubeadmConfigSpec.JoinConfiguration = &JoinConfiguration{}
+	}
+	if kubeadmConfigSpec.JoinConfiguration.NodeRegistration.KubeletExtraArgs == nil {
+		kubeadmConfigSpec.JoinConfiguration.NodeRegistration.KubeletExtraArgs = map[string]string{}
+	}
+	addLabels(kubeadmConfigSpec.JoinConfiguration.NodeRegistration.KubeletExtraArgs)
 }
 
 // IgnitionSpec contains Ignition specific configuration.
