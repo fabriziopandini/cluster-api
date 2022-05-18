@@ -188,7 +188,7 @@ func computeControlPlane(_ context.Context, s *scope.Scope, infrastructureMachin
 
 	// Carry over shim owner reference if any.
 	// NOTE: this prevents to the ownerRef to be deleted by server side apply.
-	if s.Current.ControlPlane.Object != nil {
+	if s.Current.ControlPlane != nil && s.Current.ControlPlane.Object != nil {
 		shim := clusterShim(s.Current.Cluster)
 		if ref := getOwnerReferenceFrom(s.Current.ControlPlane.Object, shim); ref != nil {
 			controlPlane.SetOwnerReferences([]metav1.OwnerReference{*ref})
@@ -526,13 +526,17 @@ func computeMachineDeployment(_ context.Context, s *scope.Scope, desiredControlP
 
 	// If the ClusterClass defines a MachineHealthCheck for the MachineDeployment add it to the desired state.
 	if machineDeploymentBlueprint.MachineHealthCheck != nil {
+		var currentMachineHealthCheck *clusterv1.MachineHealthCheck
+		if currentMachineDeployment != nil {
+			currentMachineHealthCheck = currentMachineDeployment.MachineHealthCheck
+		}
 		// Note: The MHC is going to use a selector that provides a minimal set of labels which are common to all MachineSets belonging to the MachineDeployment.
 		desiredMachineDeployment.MachineHealthCheck = computeMachineHealthCheck(
 			desiredMachineDeploymentObj,
 			selectorForMachineDeploymentMHC(desiredMachineDeploymentObj),
 			s.Current.Cluster.Name,
 			machineDeploymentBlueprint.MachineHealthCheck,
-			currentMachineDeployment.MachineHealthCheck)
+			currentMachineHealthCheck)
 	}
 	return desiredMachineDeployment, nil
 }
