@@ -49,6 +49,7 @@ func NewServerSidePatchHelper(scheme *runtime.Scheme, original, modified client.
 		// the topology controller controls/has an opinion for labels, annotation and spec only.
 		{"metadata", "labels"},
 		{"metadata", "annotations"},
+		{"metadata", "ownerReferences"},
 		{"spec"},
 	}
 
