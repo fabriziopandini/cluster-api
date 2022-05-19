@@ -753,10 +753,10 @@ func TestReconcileControlPlaneInfrastructureMachineTemplate(t *testing.T) {
 			if tt.current != nil {
 				s.Current.ControlPlane = tt.current
 				if tt.current.Object != nil {
-					g.Expect(env.CreateAndWait(ctx, tt.current.Object)).To(Succeed())
+					g.Expect(env.PatchAndWait(ctx, tt.current.Object, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
 				}
 				if tt.current.InfrastructureMachineTemplate != nil {
-					g.Expect(env.CreateAndWait(ctx, tt.current.InfrastructureMachineTemplate)).To(Succeed())
+					g.Expect(env.PatchAndWait(ctx, tt.current.InfrastructureMachineTemplate, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
 				}
 			}
 
