@@ -49,8 +49,9 @@ func filterObject(obj *unstructured.Unstructured, helperOptions *HelperOptions) 
 // NOTE: This func is called recursively only for fields of type Map, but this is ok given the current use cases
 // this func has to address. More specifically, we are using this func for filtering out not allowed paths and for ignore paths;
 // all of them are defined in reconcile_state.go and are targeting well-known fields inside nested maps.
-func filterIntent(ctx *filterIntentContext) {
+func filterIntent(ctx *filterIntentContext) bool {
 	modified, _ := ctx.modified.(map[string]interface{})
+	gotDeletions := false
 	for field := range modified {
 		fieldCtx := &filterIntentContext{
 			// Compose the path for the nested field.
@@ -64,17 +65,20 @@ func filterIntent(ctx *filterIntentContext) {
 		// If the field should be filtered out, delete it from the modified object.
 		if fieldCtx.shouldFilter(fieldCtx.path) {
 			delete(modified, field)
+			gotDeletions = true
 			continue
 		}
 
-		// Process nested fields.
-		filterIntent(fieldCtx)
-
-		// Ensure we are not leaving empty maps around.
-		if v, ok := fieldCtx.modified.(map[string]interface{}); ok && len(v) == 0 {
-			delete(modified, field)
+		// Process nested fields and get in return if filterIntent removed fields.
+		if filterIntent(fieldCtx) {
+			// Ensure we are not leaving empty maps around.
+			if v, ok := fieldCtx.modified.(map[string]interface{}); ok && len(v) == 0 {
+				delete(modified, field)
+			}
 		}
+
 	}
+	return gotDeletions
 }
 
 // filterIntentContext holds info required while filtering the intent for server side apply.
