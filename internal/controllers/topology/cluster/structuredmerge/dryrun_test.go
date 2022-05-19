@@ -752,8 +752,128 @@ func Test_dryRunPatch(t *testing.T) {
 			wantHasChanges:     true,
 			wantHasSpecChanges: true,
 		},
+		{
+			name: "Identified nested field got added",
+			ctx: &hasChangesContext{
+				path: contract.Path{},
+				fieldsV1: map[string]interface{}{
+					// apiVersion, kind, metadata.name and metadata.namespace are not tracked in managedField.
+					// NOTE: We are simulating a real object with something in spec and labels, so both
+					// the top level object and metadata are considered as granular maps.
+					"f:metadata": map[string]interface{}{
+						"f:foo": map[string]interface{}{},
+					},
+					"f:spec": map[string]interface{}{
+						"f:another": map[string]interface{}{},
+					},
+				},
+				original: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+						"labels": map[string]interface{}{
+							"foo": "bar",
+						},
+						"spec": map[string]interface{}{
+							"another": "value",
+						},
+					},
+				},
+				modified: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+					},
+					"spec": map[string]interface{}{
+						"another": "value",
+						"foo": map[string]interface{}{
+							"bar": true,
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+		},
+		{
+			name: "Nested type gets changed",
+			ctx: &hasChangesContext{
+				path: contract.Path{},
+				fieldsV1: map[string]interface{}{
+					"f:spec": map[string]interface{}{
+						"f:foo": map[string]interface{}{
+							"v:bar": map[string]interface{}{},
+						},
+					},
+				},
+				original: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+					},
+					"spec": map[string]interface{}{
+						"foo": []interface{}{
+							"bar",
+						},
+					},
+				},
+				modified: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+					},
+					"spec": map[string]interface{}{
+						"foo": map[string]interface{}{
+							"bar": true,
+						},
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+		},
+		{
+			name: "Nested field is getting removed",
+			ctx: &hasChangesContext{
+				path: contract.Path{},
+				fieldsV1: map[string]interface{}{
+					"f:spec": map[string]interface{}{
+						"v:keep": map[string]interface{}{},
+						"f:foo": map[string]interface{}{
+							"v:bar": map[string]interface{}{},
+						},
+					},
+				},
+				original: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+					},
+					"spec": map[string]interface{}{
+						"keep": "me",
+						"foo": []interface{}{
+							"bar",
+						},
+					},
+				},
+				modified: map[string]interface{}{
+					"metadata": map[string]interface{}{
+						"name":      "foo",
+						"namespace": "bar",
+					},
+					"spec": map[string]interface{}{
+						"keep": "me",
+					},
+				},
+			},
+			wantHasChanges:     true,
+			wantHasSpecChanges: true,
+		},
 	}
 	for _, tt := range tests {
+		if tt.name != "Nested field is getting removed" {
+			continue
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
