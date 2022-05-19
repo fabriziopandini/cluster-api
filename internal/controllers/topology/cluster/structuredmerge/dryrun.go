@@ -109,6 +109,9 @@ func dryRunPatch(ctx *hasChangesContext) (hasChanges, hasSpecChanges bool) {
 			// Process all the fields the corresponding managed field to identify fields previously managed being
 			// dropped from modified.
 			for fieldV1 := range ctx.fieldsV1 {
+				if fieldV1 == "." {
+					continue
+				}
 				field := strings.TrimPrefix(fieldV1, "f:")
 				if !keys.Has(field) {
 					fieldPath := ctx.path.Append(field)
