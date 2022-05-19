@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -2019,16 +2020,33 @@ func TestReconcileMachineDeploymentMachineHealthCheck(t *testing.T) {
 				tt.want[i].SetNamespace(namespace.GetName())
 			}
 
+			uidsByName := map[string]types.UID{}
+
 			for _, mdts := range tt.current {
-				g.Expect(env.CreateAndWait(ctx, mdts.Object)).To(Succeed())
-				g.Expect(env.CreateAndWait(ctx, mdts.InfrastructureMachineTemplate)).To(Succeed())
-				g.Expect(env.CreateAndWait(ctx, mdts.BootstrapTemplate)).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, mdts.Object, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, mdts.InfrastructureMachineTemplate, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, mdts.BootstrapTemplate, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+
+				uidsByName[mdts.Object.Name] = mdts.Object.GetUID()
+
 				if mdts.MachineHealthCheck != nil {
 					for i, ref := range mdts.MachineHealthCheck.OwnerReferences {
 						ref.UID = mdts.Object.GetUID()
 						mdts.MachineHealthCheck.OwnerReferences[i] = ref
 					}
-					g.Expect(env.CreateAndWait(ctx, mdts.MachineHealthCheck)).To(Succeed())
+					g.Expect(env.PatchAndWait(ctx, mdts.MachineHealthCheck, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+				}
+			}
+
+			// copy over ownerReference for desired MachineHealthCheck
+			for _, mdts := range tt.desired {
+				if mdts.MachineHealthCheck != nil {
+					for i, ref := range mdts.MachineHealthCheck.OwnerReferences {
+						if uid, ok := uidsByName[ref.Name]; ok {
+							ref.UID = uid
+							mdts.MachineHealthCheck.OwnerReferences[i] = ref
+						}
+					}
 				}
 			}
 
