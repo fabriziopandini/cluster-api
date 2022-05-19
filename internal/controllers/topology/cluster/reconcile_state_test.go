@@ -35,7 +35,6 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/internal/contract"
-	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/mergepatch"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/scope"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
@@ -1860,12 +1859,7 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 						cluster: s.Current.Cluster,
 						current: s.Current.ControlPlane.Object,
 						desired: s.Desired.ControlPlane.Object,
-						opts: []mergepatch.HelperOption{
-							mergepatch.AuthoritativePaths{
-								// Note: Just using .spec.machineTemplate.metadata here as an example.
-								contract.ControlPlane().MachineTemplate().Metadata().Path(),
-							},
-						}})).To(Succeed())
+					})).To(Succeed())
 
 					// Build the object for comparison.
 					want := &unstructured.Unstructured{
