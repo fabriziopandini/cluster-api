@@ -1219,9 +1219,9 @@ func TestReconcileMachineDeployments(t *testing.T) {
 			}
 
 			for _, s := range tt.current {
-				g.Expect(env.CreateAndWait(ctx, s.InfrastructureMachineTemplate)).To(Succeed())
-				g.Expect(env.CreateAndWait(ctx, s.BootstrapTemplate)).To(Succeed())
-				g.Expect(env.CreateAndWait(ctx, s.Object)).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, s.InfrastructureMachineTemplate, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, s.BootstrapTemplate, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
+				g.Expect(env.PatchAndWait(ctx, s.Object, client.ForceOwnership, client.FieldOwner("topology"))).To(Succeed())
 			}
 
 			currentMachineDeploymentStates := toMachineDeploymentTopologyStateMap(tt.current)
