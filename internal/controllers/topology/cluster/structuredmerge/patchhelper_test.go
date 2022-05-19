@@ -285,4 +285,28 @@ func TestServerSideApply(t *testing.T) {
 		g.Expect(specFieldV1).ToNot(HaveKey("f:ignoreThisField")) // topology controller should not express opinions on ignore paths.
 		g.Expect(specFieldV1).To(HaveKey("f:infra-foo"))          // topology controller now has an opinion on a field previously managed by other controllers (force ownership).
 	})
+	t.Run("No-op on unstructured object having empty map[string]interface in spec", func(t *testing.T) {
+		g := NewWithT(t)
+
+		// Second test object having an empty map and slice as value
+		obj2 := builder.InfrastructureClusterTemplate(ns.Name, "obj2").WithSpecFields(map[string]interface{}{
+			"spec.emptyMap":   map[string]interface{}{},
+			"spec.emptySlice": []interface{}{}, // this field is then explicitly ignored by the patch helper
+		}).Build()
+
+		// create new object having an empty map[string]interface in spec and a copy of it for further testing
+		original := obj2.DeepCopy()
+		modified := obj2.DeepCopy()
+
+		// Create the object using server side apply
+		g.Expect(env.PatchAndWait(ctx, original, client.FieldOwner("topology"))).To(Succeed())
+		// Get created object to have managed fields
+		g.Expect(env.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(original), original)).To(Succeed())
+
+		// Create a patch helper for a modified object with which has no changes.
+		p0, err := NewServerSidePatchHelper(fakeScheme, original, modified, env.GetClient())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(p0.HasChanges()).To(BeFalse())
+		g.Expect(p0.HasSpecChanges()).To(BeFalse())
+	})
 }
