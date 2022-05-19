@@ -17,7 +17,6 @@ limitations under the License.
 package cluster
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -39,7 +38,6 @@ import (
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/scope"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
-	"sigs.k8s.io/cluster-api/util/patch"
 )
 
 var (
@@ -1394,10 +1392,7 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 						spec: map[string]interface{}{
 							"kubeadmConfigSpec": map[string]interface{}{
 								"clusterConfiguration": map[string]interface{}{
-									"controllerManager": map[string]interface{}{
-										// Reconcile to drop enable-hostpath-provisioner, extraArgs has been set to an empty object.
-										"extraArgs": map[string]interface{}{},
-									},
+									"controllerManager": nil,
 								},
 							},
 						},
@@ -1615,7 +1610,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 								"clusterConfiguration": map[string]interface{}{
 									"controllerManager": map[string]interface{}{
 										"extraArgs": map[string]interface{}{
-											"enable-hostpath-provisioner": "true",
 											// User adds enable-garbage-collector.
 											"enable-garbage-collector": "true",
 										},
@@ -1630,10 +1624,7 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 					desired: object{
 						spec: map[string]interface{}{
 							"kubeadmConfigSpec": map[string]interface{}{
-								"clusterConfiguration": map[string]interface{}{
-									// enable-hostpath-provisioner has been removed by e.g a change in ClusterClass (and extraArgs with it).
-									"controllerManager": map[string]interface{}{},
-								},
+								"clusterConfiguration": map[string]interface{}{},
 							},
 						},
 					},
@@ -1780,7 +1771,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 										"boolField":   true,
 										"stringField": "def",
 									},
-									"clusterClassObject": map[string]interface{}{},
 								},
 							},
 						},
@@ -1823,12 +1813,20 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 				}
 
 				if step, ok := step.(externalStep); ok {
-					// This is a user step, so let's just update the object.
-					patchHelper, err := patch.NewHelper(currentControlPlane, env)
+					// This is a user step, so let's just update the object using SSA.
+					obj := &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"kind":       "GenericControlPlane",
+							"apiVersion": "controlplane.cluster.x-k8s.io/v1beta1",
+							"metadata": map[string]interface{}{
+								"name":      "my-cluster",
+								"namespace": namespace.GetName(),
+							},
+							"spec": step.object.spec,
+						},
+					}
+					err := env.PatchAndWait(ctx, obj, client.FieldOwner("other-controller"), client.ForceOwnership)
 					g.Expect(err).ToNot(HaveOccurred())
-
-					g.Expect(unstructured.SetNestedField(currentControlPlane.Object, step.object.spec, "spec")).To(Succeed())
-					g.Expect(patchHelper.Patch(context.Background(), currentControlPlane)).To(Succeed())
 					continue
 				}
 
@@ -1856,11 +1854,8 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 						},
 					}
 					if currentControlPlane != nil {
-						// Set the annotation of the current control plane.
-						annotations, found, err := unstructured.NestedFieldCopy(currentControlPlane.Object, "metadata", "annotations")
-						g.Expect(err).ToNot(HaveOccurred())
-						g.Expect(found).To(BeTrue())
-						g.Expect(unstructured.SetNestedField(s.Desired.ControlPlane.Object.Object, annotations, "metadata", "annotations")).To(Succeed())
+						// TODO(schloc) SSA removes this annotation which is why this is not needed anymore
+						// We could implement here something to test migration form non-SSA to SSA by migrating a managed fields annotation
 					}
 
 					// Execute a reconcile.0
