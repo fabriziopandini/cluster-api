@@ -57,7 +57,8 @@ func getTopologyManagedFields(original client.Object) map[string]interface{} {
 func dryRunPatch(ctx *hasChangesContext) (hasChanges, hasSpecChanges bool) {
 	// If the func is processing a modified element of type map
 	if modifiedMap, ok := ctx.modified.(map[string]interface{}); ok {
-		originalMap := ctx.original.(map[string]interface{})
+		// NOTE: ignoring the error in case the element wasn't in original.
+		originalMap, _ := ctx.original.(map[string]interface{})
 
 		// Process mapType/structType = granular, previously not empty.
 		// NOTE: mapType/structType = atomic is managed like scalar values down in the func;
