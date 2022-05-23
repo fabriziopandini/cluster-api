@@ -163,6 +163,15 @@ func hasOwnerReferenceFrom(obj, owner client.Object) bool {
 	return false
 }
 
+func getOwnerReferenceFrom(obj, owner client.Object) *metav1.OwnerReference {
+	for _, o := range obj.GetOwnerReferences() {
+		if o.Kind == owner.GetObjectKind().GroupVersionKind().Kind && o.Name == owner.GetName() {
+			return &o
+		}
+	}
+	return nil
+}
+
 // reconcileInfrastructureCluster reconciles the desired state of the InfrastructureCluster object.
 func (r *Reconciler) reconcileInfrastructureCluster(ctx context.Context, s *scope.Scope) error {
 	ctx, _ = tlog.LoggerFrom(ctx).WithObject(s.Desired.InfrastructureCluster).Into(ctx)

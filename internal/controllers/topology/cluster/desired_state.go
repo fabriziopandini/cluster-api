@@ -71,7 +71,8 @@ func (r *Reconciler) computeDesiredState(ctx context.Context, s *scope.Scope) (*
 			desiredState.ControlPlane.Object,
 			selectorForControlPlaneMHC(),
 			s.Current.Cluster.Name,
-			s.Blueprint.ControlPlane.MachineHealthCheck)
+			s.Blueprint.ControlPlane.MachineHealthCheck,
+			s.Current.ControlPlane.MachineHealthCheck)
 	}
 
 	// Compute the desired state for the Cluster object adding a reference to the
@@ -120,6 +121,16 @@ func computeInfrastructureCluster(_ context.Context, s *scope.Scope) (*unstructu
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to generate the InfrastructureCluster object from the %s", template.GetKind())
 	}
+
+	// Carry over shim owner reference if any.
+	// NOTE: this prevents to the ownerRef to be deleted by server side apply.
+	if s.Current.InfrastructureCluster != nil {
+		shim := clusterShim(s.Current.Cluster)
+		if ref := getOwnerReferenceFrom(s.Current.InfrastructureCluster, shim); ref != nil {
+			infrastructureCluster.SetOwnerReferences([]metav1.OwnerReference{*ref})
+		}
+	}
+
 	return infrastructureCluster, nil
 }
 
@@ -173,6 +184,15 @@ func computeControlPlane(_ context.Context, s *scope.Scope, infrastructureMachin
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to generate the ControlPlane object from the %s", template.GetKind())
+	}
+
+	// Carry over shim owner reference if any.
+	// NOTE: this prevents to the ownerRef to be deleted by server side apply.
+	if s.Current.ControlPlane.Object != nil {
+		shim := clusterShim(s.Current.Cluster)
+		if ref := getOwnerReferenceFrom(s.Current.ControlPlane.Object, shim); ref != nil {
+			controlPlane.SetOwnerReferences([]metav1.OwnerReference{*ref})
+		}
 	}
 
 	// If the ClusterClass mandates the controlPlane has infrastructureMachines, add a reference to InfrastructureMachine
@@ -511,7 +531,8 @@ func computeMachineDeployment(_ context.Context, s *scope.Scope, desiredControlP
 			desiredMachineDeploymentObj,
 			selectorForMachineDeploymentMHC(desiredMachineDeploymentObj),
 			s.Current.Cluster.Name,
-			machineDeploymentBlueprint.MachineHealthCheck)
+			machineDeploymentBlueprint.MachineHealthCheck,
+			currentMachineDeployment.MachineHealthCheck)
 	}
 	return desiredMachineDeployment, nil
 }
@@ -744,7 +765,7 @@ func ownerReferenceTo(obj client.Object) *metav1.OwnerReference {
 	}
 }
 
-func computeMachineHealthCheck(healthCheckTarget client.Object, selector *metav1.LabelSelector, clusterName string, check *clusterv1.MachineHealthCheckClass) *clusterv1.MachineHealthCheck {
+func computeMachineHealthCheck(healthCheckTarget client.Object, selector *metav1.LabelSelector, clusterName string, check *clusterv1.MachineHealthCheckClass, current *clusterv1.MachineHealthCheck) *clusterv1.MachineHealthCheck {
 	// Create a MachineHealthCheck with the spec given in the ClusterClass.
 	mhc := &clusterv1.MachineHealthCheck{
 		TypeMeta: metav1.TypeMeta{
@@ -765,9 +786,19 @@ func computeMachineHealthCheck(healthCheckTarget client.Object, selector *metav1
 			RemediationTemplate: check.RemediationTemplate,
 		},
 	}
+
 	// Default all fields in the MachineHealthCheck using the same function called in the webhook. This ensures the desired
 	// state of the object won't be different from the current state due to webhook Defaulting.
 	mhc.Default()
+
+	// Carry over ownerReference to the target object.
+	// NOTE: this prevents to the ownerRef to be deleted by server side apply.
+	if current != nil {
+		if ref := getOwnerReferenceFrom(current, healthCheckTarget); ref != nil {
+			mhc.SetOwnerReferences([]metav1.OwnerReference{*ref})
+		}
+	}
+
 	return mhc
 }
 
