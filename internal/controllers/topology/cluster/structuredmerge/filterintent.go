@@ -90,14 +90,11 @@ type filterIntentContext struct {
 	modified interface{}
 
 	// shouldFilter handle the func that determine if the current path should be dropped or not.
-	shouldFilter filterFieldFunc
+	shouldFilter func(path contract.Path) bool
 }
 
-// filterFieldFunc defines a func that determine if the current path should be filtered out from the current object or not.
-type filterFieldFunc func(path contract.Path) bool
-
-// isAllowedPath returns a filterFieldFunc that returns true when the path is one of the allowedPaths.
-func isAllowedPath(allowedPaths []contract.Path) filterFieldFunc {
+// isAllowedPath returns true when the path is one of the allowedPaths.
+func isAllowedPath(allowedPaths []contract.Path) func(path contract.Path) bool {
 	return func(path contract.Path) bool {
 		for _, p := range allowedPaths {
 			if path.Overlaps(p) {
@@ -108,16 +105,16 @@ func isAllowedPath(allowedPaths []contract.Path) filterFieldFunc {
 	}
 }
 
-// isNotAllowedPath returns a filterFieldFunc that returns true when the path is NOT one of the allowedPaths.
-func isNotAllowedPath(allowedPaths []contract.Path) filterFieldFunc {
+// isNotAllowedPath returns true when the path is NOT one of the allowedPaths.
+func isNotAllowedPath(allowedPaths []contract.Path) func(path contract.Path) bool {
 	return func(path contract.Path) bool {
 		isAllowed := isAllowedPath(allowedPaths)
 		return !isAllowed(path)
 	}
 }
 
-// isIgnorePath returns a filterFieldFunc that returns true when the path is one of the ignorePaths.
-func isIgnorePath(ignorePaths []contract.Path) filterFieldFunc {
+// isIgnorePath returns true when the path is one of the ignorePaths.
+func isIgnorePath(ignorePaths []contract.Path) func(path contract.Path) bool {
 	return func(path contract.Path) bool {
 		for _, p := range ignorePaths {
 			if path.Equal(p) {

@@ -1798,11 +1798,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 						s.Desired.ControlPlane.Object.Object["spec"] = step.desired.spec
 					}
 
-					if currentControlPlane != nil {
-						// TODO(schloc) SSA removes this annotation which is why this is not needed anymore
-						// We could implement here something to test migration form non-SSA to SSA by migrating a managed fields annotation
-					}
-
 					// Execute a reconcile.0
 					g.Expect(r.reconcileReferencedObject(ctx, reconcileReferencedObjectInput{
 						cluster: s.Current.Cluster,
