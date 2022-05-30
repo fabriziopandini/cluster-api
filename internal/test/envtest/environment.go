@@ -173,6 +173,12 @@ func newEnvironment(uncachedObjs ...client.Object) *Environment {
 			builder.GenericInfrastructureClusterTemplateCRD.DeepCopy(),
 			builder.GenericRemediationCRD.DeepCopy(),
 			builder.GenericRemediationTemplateCRD.DeepCopy(),
+			builder.TestInfrastructureClusterCRD.DeepCopy(),
+			builder.TestInfrastructureMachineTemplateCRD.DeepCopy(),
+			builder.TestInfrastructureMachineCRD.DeepCopy(),
+			builder.TestBootstrapConfigTemplateCRD.DeepCopy(),
+			builder.TestBootstrapConfigCRD.DeepCopy(),
+			builder.TestControlPlaneCRD.DeepCopy(),
 		},
 		// initialize webhook here to be able to test the envtest install via webhookOptions
 		// This should set LocalServingCertDir and LocalServingPort that are used below.
@@ -384,10 +390,15 @@ func (e *Environment) CreateAndWait(ctx context.Context, obj client.Object, opts
 	return nil
 }
 
+// PatchAndWait patches the given object and waits for the cache to be updated accordingly.
+//
+// NOTE: Waiting for the cache to be updated helps in preventing test flakes due to the cache sync delays.
 func (e *Environment) PatchAndWait(ctx context.Context, obj client.Object, opts ...client.PatchOption) error {
 	if err := e.Client.Patch(ctx, obj, client.Apply, opts...); err != nil {
 		return err
 	}
+
+	// TODO: get current object, if any --> store resourceVersion
 
 	// Makes sure the cache is updated with the new object
 	objCopy := obj.DeepCopyObject().(client.Object)
@@ -401,6 +412,7 @@ func (e *Environment) PatchAndWait(ctx context.Context, obj client.Object, opts 
 				}
 				return false, err
 			}
+			// TODO: check resource version is changes
 			return true, nil
 		}); err != nil {
 		return errors.Wrapf(err, "object %s, %s is not being added to the testenv client cache", obj.GetObjectKind().GroupVersionKind().String(), key)
