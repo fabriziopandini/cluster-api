@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/contract"
 )
 
-const topologyManager = "topology"
+const topologyManagerName = "topology"
 
 type serverSidePatchHelper struct {
 	client         client.Client
@@ -124,7 +124,7 @@ func (h *serverSidePatchHelper) Patch(ctx context.Context) error {
 	log.V(5).Info("Patching object", "Patch", string("TODO")) // TODO: we can eventually log the intent
 
 	options := []client.PatchOption{
-		client.FieldOwner(topologyManager),
+		client.FieldOwner(topologyManagerName),
 		// NOTE: we are using force ownership so in case of conflicts the topology controller
 		// overwrite values and become sole manager.
 		client.ForceOwnership,

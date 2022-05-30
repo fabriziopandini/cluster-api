@@ -35,7 +35,7 @@ func getTopologyManagedFields(original client.Object) map[string]interface{} {
 	r := map[string]interface{}{}
 	for _, m := range original.GetManagedFields() {
 		if m.Operation == metav1.ManagedFieldsOperationApply &&
-			m.Manager == topologyManager &&
+			m.Manager == topologyManagerName &&
 			m.APIVersion == original.GetObjectKind().GroupVersionKind().GroupVersion().String() {
 			// NOTE: ignoring this error because API server ensures this is a valid yaml.
 			_ = json.Unmarshal(m.FieldsV1.Raw, &r)
@@ -224,7 +224,7 @@ type hasChangesContext struct {
 
 // splitChange determine if a change in a path impact the spec.
 func splitChange(p contract.Path) (hasChanges, hasSpecChanges bool) {
-	return true, len(p) > 0 && p[0] == "spec"
+	return true, len(p) == 0 || (len(p) > 0 && p[0] == "spec")
 }
 
 // getFieldV1Keys returns the keys for a listMap item in metadata.managedFields;

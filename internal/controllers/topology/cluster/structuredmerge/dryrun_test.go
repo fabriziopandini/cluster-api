@@ -871,9 +871,6 @@ func Test_dryRunPatch(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		if tt.name != "Nested field is getting removed" {
-			continue
-		}
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 

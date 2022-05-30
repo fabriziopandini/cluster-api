@@ -76,7 +76,6 @@ func filterIntent(ctx *filterIntentContext) bool {
 				delete(modified, field)
 			}
 		}
-
 	}
 	return gotDeletions
 }
