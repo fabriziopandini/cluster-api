@@ -90,6 +90,9 @@ func (r *Reconciler) reconcileClusterShim(ctx context.Context, s *scope.Scope) e
 	// creating InfrastructureCluster/ControlPlane objects and updating the Cluster with the
 	// references to above objects.
 	if s.Current.InfrastructureCluster == nil || s.Current.ControlPlane.Object == nil {
+		// Note: we are using Patch instead of create for ensuring consistency in managedFields for the entire controller
+		// but in this case it isn't strictly necessary given that we are not using server side apply for modifying the
+		// object afterwards.
 		if err := r.Client.Patch(ctx, shim, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return errors.Wrap(err, "failed to create the cluster shim object")
@@ -358,7 +361,9 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, s *scope.Scope) error
 	ctx, log := tlog.LoggerFrom(ctx).WithObject(s.Desired.Cluster).Into(ctx)
 
 	// Check differences between current and desired state, and eventually patch the current object.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), s.Current.Cluster, s.Desired.Cluster, r.Client)
+	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), s.Current.Cluster, s.Desired.Cluster, r.Client, structuredmerge.IgnorePaths{
+		{"spec", "controlPlaneEndpoint"}, // this is a well known field that is managed by the Cluster controller, topology should not express opinions on it.
+	})
 	if err != nil {
 		return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: s.Current.Cluster})
 	}
