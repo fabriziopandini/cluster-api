@@ -106,7 +106,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	r.patchEngine = patches.NewEngine()
 	r.recorder = mgr.GetEventRecorderFor("topology/cluster")
 	if r.patchHelperFactory == nil {
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 	}
 	return nil
 }
@@ -117,7 +117,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 func (r *Reconciler) SetupForDryRun(recorder record.EventRecorder) {
 	r.patchEngine = patches.NewEngine()
 	r.recorder = recorder
-	r.patchHelperFactory = r.patchHelperTwoSideMerge
+	r.patchHelperFactory = r.patchHelperDryRun
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
@@ -295,10 +295,12 @@ func (r *Reconciler) machineDeploymentToCluster(o client.Object) []ctrl.Request 
 	}}
 }
 
-func (r *Reconciler) patchHelperServerSideApply(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
+// patchHelperDefault makes use of managed fields provided by server side apply and is used by the controllers.
+func (r *Reconciler) patchHelperDefault(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
 	return structuredmerge.NewServerSidePatchHelper(original, modified, r.Client, opts...)
 }
 
-func (r *Reconciler) patchHelperTwoSideMerge(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
+// patchHelperDryRun makes use of a two way patch and is used in situations where we cannot rely on managed fields.
+func (r *Reconciler) patchHelperDryRun(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
 	return structuredmerge.NewTwoWaysPatchHelper(original, modified, r.Client, opts...)
 }

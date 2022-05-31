@@ -102,7 +102,7 @@ func TestGetReference(t *testing.T) {
 				Client:                    fakeClient,
 				UnstructuredCachingClient: fakeClient,
 			}
-			r.patchHelperFactory = r.patchHelperTwoSideMerge
+			r.patchHelperFactory = r.patchHelperDryRun
 			got, err := r.getReference(ctx, tt.ref)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())

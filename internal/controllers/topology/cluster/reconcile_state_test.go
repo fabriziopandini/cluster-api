@@ -80,7 +80,7 @@ func TestReconcileShim(t *testing.T) {
 		r := Reconciler{
 			Client: env,
 		}
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
 
@@ -122,7 +122,7 @@ func TestReconcileShim(t *testing.T) {
 		r := Reconciler{
 			Client: env,
 		}
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
 
@@ -171,7 +171,7 @@ func TestReconcileShim(t *testing.T) {
 		r := Reconciler{
 			Client: env,
 		}
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
 
@@ -217,7 +217,7 @@ func TestReconcileShim(t *testing.T) {
 		r := Reconciler{
 			Client: env,
 		}
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
 
@@ -257,7 +257,7 @@ func TestReconcileShim(t *testing.T) {
 		r := Reconciler{
 			Client: nil,
 		}
-		r.patchHelperFactory = r.patchHelperServerSideApply
+		r.patchHelperFactory = r.patchHelperDefault
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
 
@@ -329,7 +329,7 @@ func TestReconcileCluster(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 			err = r.reconcileCluster(ctx, s)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
@@ -454,7 +454,7 @@ func TestReconcileInfrastructureCluster(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 			err = r.reconcileInfrastructureCluster(ctx, s)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
@@ -708,7 +708,7 @@ func TestReconcileControlPlane(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 
 			s.Desired = &scope.ClusterState{
 				ControlPlane: &scope.ControlPlaneState{
@@ -975,7 +975,7 @@ func TestReconcileControlPlaneMachineHealthCheck(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 
 			s.Desired = &scope.ClusterState{
 				ControlPlane: tt.desired,
@@ -1229,7 +1229,7 @@ func TestReconcileMachineDeployments(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 			err = r.reconcileMachineDeployments(ctx, s)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
@@ -1743,7 +1743,7 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 
 			s := scope.New(&clusterv1.Cluster{})
 			s.Blueprint = &scope.ClusterBlueprint{
@@ -2012,7 +2012,7 @@ func TestReconcileMachineDeploymentMachineHealthCheck(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 
 			err = r.reconcileMachineDeployments(ctx, s)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -2174,7 +2174,7 @@ func TestReconciler_reconcileMachineHealthCheck(t *testing.T) {
 				Client:   env,
 				recorder: env.GetEventRecorderFor("test"),
 			}
-			r.patchHelperFactory = r.patchHelperServerSideApply
+			r.patchHelperFactory = r.patchHelperDefault
 			if tt.current != nil {
 				g.Expect(env.CreateAndWait(ctx, tt.current)).To(Succeed())
 			}

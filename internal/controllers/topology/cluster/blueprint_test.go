@@ -317,7 +317,7 @@ func TestGetBlueprint(t *testing.T) {
 				Client:                    fakeClient,
 				UnstructuredCachingClient: fakeClient,
 			}
-			r.patchHelperFactory = r.patchHelperTwoSideMerge
+			r.patchHelperFactory = r.patchHelperDryRun
 			got, err := r.getBlueprint(ctx, scope.New(cluster).Current.Cluster)
 
 			// Checks the return error.
