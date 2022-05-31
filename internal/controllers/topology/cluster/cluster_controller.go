@@ -22,7 +22,6 @@ import (
 
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
@@ -73,7 +72,7 @@ type Reconciler struct {
 	// patchEngine is used to apply patches during computeDesiredState.
 	patchEngine patches.Engine
 
-	PatchHelperFactory func(scheme *runtime.Scheme, original, modified client.Object, c client.Client, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error)
+	patchHelperFactory func(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error)
 }
 
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
@@ -106,13 +105,19 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	}
 	r.patchEngine = patches.NewEngine()
 	r.recorder = mgr.GetEventRecorderFor("topology/cluster")
+	if r.patchHelperFactory == nil {
+		r.patchHelperFactory = r.patchHelperServerSideApply
+	}
 	return nil
 }
+
+// Add two factory functions
 
 // SetupForDryRun prepares the Reconciler for a dry run execution.
 func (r *Reconciler) SetupForDryRun(recorder record.EventRecorder) {
 	r.patchEngine = patches.NewEngine()
 	r.recorder = recorder
+	r.patchHelperFactory = r.patchHelperTwoSideMerge
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
@@ -288,4 +293,12 @@ func (r *Reconciler) machineDeploymentToCluster(o client.Object) []ctrl.Request 
 			Name:      md.Spec.ClusterName,
 		},
 	}}
+}
+
+func (r *Reconciler) patchHelperServerSideApply(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
+	return structuredmerge.NewServerSidePatchHelper(original, modified, r.Client, opts...)
+}
+
+func (r *Reconciler) patchHelperTwoSideMerge(original, modified client.Object, opts ...structuredmerge.HelperOption) (structuredmerge.PatchHelper, error) {
+	return structuredmerge.NewTwoWaysPatchHelper(original, modified, r.Client, opts...)
 }

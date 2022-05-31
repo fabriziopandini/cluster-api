@@ -20,7 +20,6 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -37,7 +36,7 @@ type serverSidePatchHelper struct {
 }
 
 // NewServerSidePatchHelper returns a new PatchHelper using server side apply.
-func NewServerSidePatchHelper(scheme *runtime.Scheme, original, modified client.Object, c client.Client, opts ...HelperOption) (PatchHelper, error) {
+func NewServerSidePatchHelper(original, modified client.Object, c client.Client, opts ...HelperOption) (PatchHelper, error) {
 	helperOptions := &HelperOptions{}
 	helperOptions = helperOptions.ApplyOptions(opts)
 	helperOptions.allowedPaths = []contract.Path{
@@ -63,7 +62,7 @@ func NewServerSidePatchHelper(scheme *runtime.Scheme, original, modified client.
 		case *unstructured.Unstructured:
 			originalUnstructured = original.DeepCopyObject().(*unstructured.Unstructured)
 		default:
-			if err := scheme.Convert(original, originalUnstructured, nil); err != nil {
+			if err := c.Scheme().Convert(original, originalUnstructured, nil); err != nil {
 				return nil, errors.Wrap(err, "failed to convert original object to Unstructured")
 			}
 		}
@@ -75,7 +74,7 @@ func NewServerSidePatchHelper(scheme *runtime.Scheme, original, modified client.
 	case *unstructured.Unstructured:
 		modifiedUnstructured = modified.DeepCopyObject().(*unstructured.Unstructured)
 	default:
-		if err := scheme.Convert(modified, modifiedUnstructured, nil); err != nil {
+		if err := c.Scheme().Convert(modified, modifiedUnstructured, nil); err != nil {
 			return nil, errors.Wrap(err, "failed to convert original object to Unstructured")
 		}
 	}

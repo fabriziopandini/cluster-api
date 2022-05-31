@@ -43,7 +43,6 @@ import (
 	logf "sigs.k8s.io/cluster-api/cmd/clusterctl/log"
 	"sigs.k8s.io/cluster-api/feature"
 	clustertopologycontroller "sigs.k8s.io/cluster-api/internal/controllers/topology/cluster"
-	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/webhooks"
 )
 
@@ -202,7 +201,6 @@ func (t *topologyClient) Plan(in *TopologyPlanInput) (*TopologyPlanOutput, error
 		Client:                    dryRunClient,
 		APIReader:                 dryRunClient,
 		UnstructuredCachingClient: dryRunClient,
-		PatchHelperFactory:        structuredmerge.NewTwoWaysPatchHelper,
 	}
 	reconciler.SetupForDryRun(&noOpRecorder{})
 	request := reconcile.Request{NamespacedName: *targetCluster}

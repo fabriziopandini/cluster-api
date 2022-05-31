@@ -28,7 +28,6 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/scope"
-	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
 )
@@ -317,8 +316,8 @@ func TestGetBlueprint(t *testing.T) {
 			r := &Reconciler{
 				Client:                    fakeClient,
 				UnstructuredCachingClient: fakeClient,
-				PatchHelperFactory:        structuredmerge.NewTwoWaysPatchHelper,
 			}
+			r.patchHelperFactory = r.patchHelperTwoSideMerge
 			got, err := r.getBlueprint(ctx, scope.New(cluster).Current.Cluster)
 
 			// Checks the return error.

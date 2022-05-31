@@ -30,7 +30,6 @@ import (
 	machinehealthcheckcontroller "sigs.k8s.io/cluster-api/internal/controllers/machinehealthcheck"
 	machinesetcontroller "sigs.k8s.io/cluster-api/internal/controllers/machineset"
 	clustertopologycontroller "sigs.k8s.io/cluster-api/internal/controllers/topology/cluster"
-	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	machinedeploymenttopologycontroller "sigs.k8s.io/cluster-api/internal/controllers/topology/machinedeployment"
 	machinesettopologycontroller "sigs.k8s.io/cluster-api/internal/controllers/topology/machineset"
 )
@@ -148,7 +147,6 @@ func (r *ClusterTopologyReconciler) SetupWithManager(ctx context.Context, mgr ct
 		APIReader:                 r.APIReader,
 		UnstructuredCachingClient: r.UnstructuredCachingClient,
 		WatchFilterValue:          r.WatchFilterValue,
-		PatchHelperFactory:        structuredmerge.NewServerSidePatchHelper,
 	}).SetupWithManager(ctx, mgr, options)
 }
 

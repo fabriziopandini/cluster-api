@@ -29,7 +29,6 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/scope"
-	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
 )
@@ -539,8 +538,8 @@ func TestGetCurrentState(t *testing.T) {
 				Client:                    fakeClient,
 				APIReader:                 fakeClient,
 				UnstructuredCachingClient: fakeClient,
-				PatchHelperFactory:        structuredmerge.NewTwoWaysPatchHelper,
 			}
+			r.patchHelperFactory = r.patchHelperTwoSideMerge
 			got, err := r.getCurrentState(ctx, s)
 
 			// Checks the return error.

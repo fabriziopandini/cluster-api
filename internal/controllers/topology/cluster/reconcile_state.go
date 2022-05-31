@@ -93,7 +93,7 @@ func (r *Reconciler) reconcileClusterShim(ctx context.Context, s *scope.Scope) e
 		// Note: we are using Patch instead of create for ensuring consistency in managedFields for the entire controller
 		// but in this case it isn't strictly necessary given that we are not using server side apply for modifying the
 		// object afterwards.
-		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, shim, r.Client)
+		helper, err := r.patchHelperFactory(nil, shim)
 		if err != nil {
 			return errors.Wrap(err, "failed to create the patch helper for the cluster shim object")
 		}
@@ -287,7 +287,7 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 		log.Infof("Creating %s", tlog.KObj{Obj: desired})
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: desired})
 		}
@@ -316,7 +316,7 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 	// Check differences between current and desired MachineHealthChecks, and patch if required.
 	// NOTE: we want to be authoritative on the entire spec because the users are
 	// expected to change MHC fields from the ClusterClass only.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), current, desired, r.Client)
+	patchHelper, err := r.patchHelperFactory(current, desired)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: current})
 	}
@@ -369,7 +369,7 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, s *scope.Scope) error
 	ctx, log := tlog.LoggerFrom(ctx).WithObject(s.Desired.Cluster).Into(ctx)
 
 	// Check differences between current and desired state, and eventually patch the current object.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), s.Current.Cluster, s.Desired.Cluster, r.Client, structuredmerge.IgnorePaths{
+	patchHelper, err := r.patchHelperFactory(s.Current.Cluster, s.Desired.Cluster, structuredmerge.IgnorePaths{
 		{"spec", "controlPlaneEndpoint"}, // this is a well known field that is managed by the Cluster controller, topology should not express opinions on it.
 	})
 	if err != nil {
@@ -444,7 +444,7 @@ func (r *Reconciler) createMachineDeployment(ctx context.Context, cluster *clust
 	desired := md.Object.DeepCopy()
 	// ensure no managedFields are set
 	desired.SetManagedFields(nil)
-	helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+	helper, err := r.patchHelperFactory(nil, desired)
 	if err != nil {
 		return createErrorWithoutObjectName(err, md.Object)
 	}
@@ -504,7 +504,7 @@ func (r *Reconciler) updateMachineDeployment(ctx context.Context, cluster *clust
 
 	// Check differences between current and desired MachineDeployment, and eventually patch the current object.
 	log = log.WithObject(desiredMD.Object)
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), currentMD.Object, desiredMD.Object, r.Client)
+	patchHelper, err := r.patchHelperFactory(currentMD.Object, desiredMD.Object)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: currentMD.Object})
 	}
@@ -601,7 +601,7 @@ func (r *Reconciler) reconcileReferencedObject(ctx context.Context, in reconcile
 		desired := in.desired.DeepCopy()
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
 		}
@@ -618,7 +618,7 @@ func (r *Reconciler) reconcileReferencedObject(ctx context.Context, in reconcile
 	}
 
 	// Check differences between current and desired state, and eventually patch the current object.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), in.current, in.desired, r.Client, structuredmerge.IgnorePaths(in.ignorePaths))
+	patchHelper, err := r.patchHelperFactory(in.current, in.desired, structuredmerge.IgnorePaths(in.ignorePaths))
 	if err != nil {
 		return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: in.current})
 	}
@@ -681,7 +681,7 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 		desired := in.desired.DeepCopy()
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
 		}
@@ -702,7 +702,7 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	}
 
 	// Check differences between current and desired objects, and if there are changes eventually start the template rotation.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), in.current, in.desired, r.Client)
+	patchHelper, err := r.patchHelperFactory(in.current, in.desired)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: in.current})
 	}
@@ -736,7 +736,7 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	desired := in.desired.DeepCopy()
 	// ensure no managedFields are set
 	desired.SetManagedFields(nil)
-	helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+	helper, err := r.patchHelperFactory(nil, desired)
 	if err != nil {
 		return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
 	}
