@@ -34,6 +34,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/api/v1beta1/index"
 	"sigs.k8s.io/cluster-api/internal/controllers/clusterclass"
+	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/test/envtest"
 )
 
@@ -77,6 +78,7 @@ func TestMain(m *testing.M) {
 			Client:                    mgr.GetClient(),
 			APIReader:                 mgr.GetAPIReader(),
 			UnstructuredCachingClient: unstructuredCachingClient,
+			PatchHelperFactory:        structuredmerge.NewServerSidePatchHelper,
 		}).SetupWithManager(ctx, mgr, controller.Options{MaxConcurrentReconciles: 5}); err != nil {
 			panic(fmt.Sprintf("unable to create topology cluster reconciler: %v", err))
 		}

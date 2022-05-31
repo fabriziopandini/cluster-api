@@ -25,6 +25,7 @@ import (
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -61,7 +62,7 @@ type TwoWaysPatchHelper struct {
 // - TwoWaysPatch doesn't generate metadata.managedFields as server side apply does.
 // NOTE: NewTwoWaysPatchHelper consider changes only in metadata.labels, metadata.annotation and spec; it also respects
 // the ignorePath option (same as the server side apply helper).
-func NewTwoWaysPatchHelper(original, modified client.Object, c client.Client, opts ...HelperOption) (*TwoWaysPatchHelper, error) {
+func NewTwoWaysPatchHelper(_ *runtime.Scheme, original, modified client.Object, c client.Client, opts ...HelperOption) (PatchHelper, error) {
 	helperOptions := &HelperOptions{}
 	helperOptions = helperOptions.ApplyOptions(opts)
 	helperOptions.allowedPaths = []contract.Path{

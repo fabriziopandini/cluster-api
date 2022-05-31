@@ -36,6 +36,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/internal/contract"
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/scope"
+	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
 )
@@ -78,7 +79,8 @@ func TestReconcileShim(t *testing.T) {
 
 		// Run reconcileClusterShim.
 		r := Reconciler{
-			Client: env,
+			Client:             env,
+			PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 		}
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
@@ -119,7 +121,8 @@ func TestReconcileShim(t *testing.T) {
 
 		// Run reconcileClusterShim.
 		r := Reconciler{
-			Client: env,
+			Client:             env,
+			PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 		}
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
@@ -167,7 +170,8 @@ func TestReconcileShim(t *testing.T) {
 
 		// Run reconcileClusterShim.
 		r := Reconciler{
-			Client: env,
+			Client:             env,
+			PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 		}
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
@@ -212,7 +216,8 @@ func TestReconcileShim(t *testing.T) {
 
 		// Run reconcileClusterShim.
 		r := Reconciler{
-			Client: env,
+			Client:             env,
+			PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 		}
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
@@ -251,7 +256,8 @@ func TestReconcileShim(t *testing.T) {
 
 		// Run reconcileClusterShim using a nil client, so an error will be triggered if any operation is attempted
 		r := Reconciler{
-			Client: nil,
+			Client:             nil,
+			PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 		}
 		err = r.reconcileClusterShim(ctx, s)
 		g.Expect(err).ToNot(HaveOccurred())
@@ -321,8 +327,9 @@ func TestReconcileCluster(t *testing.T) {
 			s.Desired = &scope.ClusterState{Cluster: tt.desired}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 			err = r.reconcileCluster(ctx, s)
 			if tt.wantErr {
@@ -445,8 +452,9 @@ func TestReconcileInfrastructureCluster(t *testing.T) {
 			s.Desired = &scope.ClusterState{InfrastructureCluster: tt.desired.DeepCopy()}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 			err = r.reconcileInfrastructureCluster(ctx, s)
 			if tt.wantErr {
@@ -698,8 +706,9 @@ func TestReconcileControlPlane(t *testing.T) {
 			}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 
 			s.Desired = &scope.ClusterState{
@@ -964,8 +973,9 @@ func TestReconcileControlPlaneMachineHealthCheck(t *testing.T) {
 			}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 
 			s.Desired = &scope.ClusterState{
@@ -1217,8 +1227,9 @@ func TestReconcileMachineDeployments(t *testing.T) {
 			s.Desired = &scope.ClusterState{MachineDeployments: toMachineDeploymentTopologyStateMap(tt.desired)}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 			err = r.reconcileMachineDeployments(ctx, s)
 			if tt.wantErr {
@@ -1730,8 +1741,9 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 
 			s := scope.New(&clusterv1.Cluster{})
@@ -1998,8 +2010,9 @@ func TestReconcileMachineDeploymentMachineHealthCheck(t *testing.T) {
 			s.Desired = &scope.ClusterState{MachineDeployments: toMachineDeploymentTopologyStateMap(tt.desired)}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 
 			err = r.reconcileMachineDeployments(ctx, s)
@@ -2159,8 +2172,9 @@ func TestReconciler_reconcileMachineHealthCheck(t *testing.T) {
 			}
 
 			r := Reconciler{
-				Client:   env,
-				recorder: env.GetEventRecorderFor("test"),
+				Client:             env,
+				recorder:           env.GetEventRecorderFor("test"),
+				PatchHelperFactory: structuredmerge.NewServerSidePatchHelper,
 			}
 			if tt.current != nil {
 				g.Expect(env.CreateAndWait(ctx, tt.current)).To(Succeed())

@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"sigs.k8s.io/cluster-api/internal/contract"
+	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	. "sigs.k8s.io/cluster-api/internal/test/matchers"
 )
@@ -101,6 +102,7 @@ func TestGetReference(t *testing.T) {
 			r := &Reconciler{
 				Client:                    fakeClient,
 				UnstructuredCachingClient: fakeClient,
+				PatchHelperFactory:        structuredmerge.NewTwoWaysPatchHelper,
 			}
 			got, err := r.getReference(ctx, tt.ref)
 			if tt.wantErr {
