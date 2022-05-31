@@ -93,14 +93,14 @@ func (r *Reconciler) reconcileClusterShim(ctx context.Context, s *scope.Scope) e
 		// Note: we are using Patch instead of create for ensuring consistency in managedFields for the entire controller
 		// but in this case it isn't strictly necessary given that we are not using server side apply for modifying the
 		// object afterwards.
-		if err := r.Client.Patch(ctx, shim, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
-			if !apierrors.IsAlreadyExists(err) {
-				return errors.Wrap(err, "failed to create the cluster shim object")
-			}
-			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(shim), shim); err != nil {
-				return errors.Wrapf(err, "failed to read the cluster shim object")
-			}
+		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, shim, r.Client)
+		if err != nil {
+			return errors.Wrap(err, "failed to create the patch helper for the cluster shim object")
 		}
+		if err := helper.Patch(ctx); err != nil {
+			return errors.Wrap(err, "failed to create the cluster shim object")
+		}
+
 		// Enforce type meta back given that it gets blanked out by Get.
 		shim.Kind = "Secret"
 		shim.APIVersion = corev1.SchemeGroupVersion.String()
@@ -283,7 +283,11 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 		log.Infof("Creating %s", tlog.KObj{Obj: desired})
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		if err := r.Client.Patch(ctx, desired, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
+		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		if err != nil {
+			return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: desired})
+		}
+		if err := helper.Patch(ctx); err != nil {
 			return errors.Wrapf(err, "failed to create %s", tlog.KObj{Obj: desired})
 		}
 		r.recorder.Eventf(desired, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: desired})
@@ -436,7 +440,11 @@ func (r *Reconciler) createMachineDeployment(ctx context.Context, cluster *clust
 	desired := md.Object.DeepCopy()
 	// ensure no managedFields are set
 	desired.SetManagedFields(nil)
-	if err := r.Client.Patch(ctx, desired, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
+	helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+	if err != nil {
+		return createErrorWithoutObjectName(err, md.Object)
+	}
+	if err := helper.Patch(ctx); err != nil {
 		return createErrorWithoutObjectName(err, md.Object)
 	}
 	r.recorder.Eventf(cluster, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: md.Object})
@@ -589,7 +597,11 @@ func (r *Reconciler) reconcileReferencedObject(ctx context.Context, in reconcile
 		desired := in.desired.DeepCopy()
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		if err := r.Client.Patch(ctx, desired, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
+		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		if err != nil {
+			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+		}
+		if err := helper.Patch(ctx); err != nil {
 			return createErrorWithoutObjectName(err, desired)
 		}
 		r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: in.desired})
@@ -665,7 +677,11 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 		desired := in.desired.DeepCopy()
 		// ensure no managedFields are set
 		desired.SetManagedFields(nil)
-		if err := r.Client.Patch(ctx, desired, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
+		helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+		if err != nil {
+			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+		}
+		if err := helper.Patch(ctx); err != nil {
 			return createErrorWithoutObjectName(err, desired)
 		}
 		r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: in.desired})
@@ -716,7 +732,11 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	desired := in.desired.DeepCopy()
 	// ensure no managedFields are set
 	desired.SetManagedFields(nil)
-	if err := r.Client.Patch(ctx, desired, client.Apply, client.ForceOwnership, client.FieldOwner("topology")); err != nil {
+	helper, err := structuredmerge.NewServerSidePatchHelper(r.Client.Scheme(), nil, desired, r.Client)
+	if err != nil {
+		return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+	}
+	if err := helper.Patch(ctx); err != nil {
 		return createErrorWithoutObjectName(err, desired)
 	}
 	r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q as a replacement for %q (template rotation)", tlog.KObj{Obj: in.desired}, in.ref.Name)
