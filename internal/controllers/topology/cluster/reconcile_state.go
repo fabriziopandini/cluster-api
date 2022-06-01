@@ -285,8 +285,6 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 		desired.OwnerReferences = refs
 
 		log.Infof("Creating %s", tlog.KObj{Obj: desired})
-		// ensure no managedFields are set
-		desired.SetManagedFields(nil)
 		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrapf(err, "failed to create patch helper for %s", tlog.KObj{Obj: desired})
@@ -442,8 +440,6 @@ func (r *Reconciler) createMachineDeployment(ctx context.Context, cluster *clust
 	log = log.WithObject(md.Object)
 	log.Infof(fmt.Sprintf("Creating %s", tlog.KObj{Obj: md.Object}))
 	desired := md.Object.DeepCopy()
-	// ensure no managedFields are set
-	desired.SetManagedFields(nil)
 	helper, err := r.patchHelperFactory(nil, desired)
 	if err != nil {
 		return createErrorWithoutObjectName(err, md.Object)
@@ -599,8 +595,6 @@ func (r *Reconciler) reconcileReferencedObject(ctx context.Context, in reconcile
 		log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
 
 		desired := in.desired.DeepCopy()
-		// ensure no managedFields are set
-		desired.SetManagedFields(nil)
 		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
@@ -679,8 +673,6 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	if in.current == nil {
 		log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
 		desired := in.desired.DeepCopy()
-		// ensure no managedFields are set
-		desired.SetManagedFields(nil)
 		helper, err := r.patchHelperFactory(nil, desired)
 		if err != nil {
 			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
@@ -734,8 +726,6 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	log.Infof("Rotating %s, new name %s", tlog.KObj{Obj: in.current}, newName)
 	log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
 	desired := in.desired.DeepCopy()
-	// ensure no managedFields are set
-	desired.SetManagedFields(nil)
 	helper, err := r.patchHelperFactory(nil, desired)
 	if err != nil {
 		return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
