@@ -439,8 +439,7 @@ func (r *Reconciler) createMachineDeployment(ctx context.Context, cluster *clust
 
 	log = log.WithObject(md.Object)
 	log.Infof(fmt.Sprintf("Creating %s", tlog.KObj{Obj: md.Object}))
-	desired := md.Object.DeepCopy()
-	helper, err := r.patchHelperFactory(nil, desired)
+	helper, err := r.patchHelperFactory(nil, md.Object)
 	if err != nil {
 		return createErrorWithoutObjectName(err, md.Object)
 	}
@@ -593,14 +592,12 @@ func (r *Reconciler) reconcileReferencedObject(ctx context.Context, in reconcile
 	// If there is no current object, create it.
 	if in.current == nil {
 		log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
-
-		desired := in.desired.DeepCopy()
-		helper, err := r.patchHelperFactory(nil, desired)
+		helper, err := r.patchHelperFactory(nil, in.desired)
 		if err != nil {
-			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+			return errors.Wrap(createErrorWithoutObjectName(err, in.desired), "failed to create patch helper")
 		}
 		if err := helper.Patch(ctx); err != nil {
-			return createErrorWithoutObjectName(err, desired)
+			return createErrorWithoutObjectName(err, in.desired)
 		}
 		r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: in.desired})
 		return nil
@@ -672,13 +669,12 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 	// If there is no current object, create the desired object.
 	if in.current == nil {
 		log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
-		desired := in.desired.DeepCopy()
-		helper, err := r.patchHelperFactory(nil, desired)
+		helper, err := r.patchHelperFactory(nil, in.desired)
 		if err != nil {
-			return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+			return errors.Wrap(createErrorWithoutObjectName(err, in.desired), "failed to create patch helper")
 		}
 		if err := helper.Patch(ctx); err != nil {
-			return createErrorWithoutObjectName(err, desired)
+			return createErrorWithoutObjectName(err, in.desired)
 		}
 		r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q", tlog.KObj{Obj: in.desired})
 		return nil
@@ -725,13 +721,12 @@ func (r *Reconciler) reconcileReferencedTemplate(ctx context.Context, in reconci
 
 	log.Infof("Rotating %s, new name %s", tlog.KObj{Obj: in.current}, newName)
 	log.Infof("Creating %s", tlog.KObj{Obj: in.desired})
-	desired := in.desired.DeepCopy()
-	helper, err := r.patchHelperFactory(nil, desired)
+	helper, err := r.patchHelperFactory(nil, in.desired)
 	if err != nil {
-		return errors.Wrap(createErrorWithoutObjectName(err, desired), "failed to create patch helper")
+		return errors.Wrap(createErrorWithoutObjectName(err, in.desired), "failed to create patch helper")
 	}
 	if err := helper.Patch(ctx); err != nil {
-		return createErrorWithoutObjectName(err, desired)
+		return createErrorWithoutObjectName(err, in.desired)
 	}
 	r.recorder.Eventf(in.cluster, corev1.EventTypeNormal, createEventReason, "Created %q as a replacement for %q (template rotation)", tlog.KObj{Obj: in.desired}, in.ref.Name)
 
