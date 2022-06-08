@@ -18,7 +18,6 @@ package structuredmerge
 
 import (
 	"encoding/json"
-	"reflect"
 
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
@@ -62,28 +61,25 @@ func NewServerSidePatchHelper(original, modified client.Object, c client.Client,
 	// not relevant for the topology controller.
 
 	var originalUnstructured *unstructured.Unstructured
-	if original != nil {
+	if !isNil(original) {
 		originalUnstructured = &unstructured.Unstructured{}
-		if reflect.ValueOf(original).IsValid() && !reflect.ValueOf(original).IsNil() {
-			originalUnstructured = &unstructured.Unstructured{}
-			switch original.(type) {
-			case *unstructured.Unstructured:
-				originalUnstructured = original.DeepCopyObject().(*unstructured.Unstructured)
-			default:
-				if err := c.Scheme().Convert(original, originalUnstructured, nil); err != nil {
-					return nil, errors.Wrap(err, "failed to convert original object to Unstructured")
-				}
+		switch original.(type) {
+		case *unstructured.Unstructured:
+			originalUnstructured = original.DeepCopyObject().(*unstructured.Unstructured)
+		default:
+			if err := c.Scheme().Convert(original, originalUnstructured, nil); err != nil {
+				return nil, errors.Wrap(err, "failed to convert original object to Unstructured")
 			}
-
-			// If the object has been created with previous custom approach for tracking managed fields, cleanup the object.
-			if _, ok := original.GetAnnotations()[clusterv1.ClusterTopologyManagedFieldsAnnotation]; ok {
-				if err := cleanupLegacyManagedFields(originalUnstructured, c); err != nil {
-					return nil, errors.Wrap(err, "failed to cleanup legacy managed fields from original object")
-				}
-			}
-
-			filterObject(originalUnstructured, helperOptions)
 		}
+
+		// If the object has been created with previous custom approach for tracking managed fields, cleanup the object.
+		if _, ok := original.GetAnnotations()[clusterv1.ClusterTopologyManagedFieldsAnnotation]; ok {
+			if err := cleanupLegacyManagedFields(originalUnstructured, c); err != nil {
+				return nil, errors.Wrap(err, "failed to cleanup legacy managed fields from original object")
+			}
+		}
+
+		filterObject(originalUnstructured, helperOptions)
 	}
 
 	modifiedUnstructured := &unstructured.Unstructured{}
@@ -100,8 +96,8 @@ func NewServerSidePatchHelper(original, modified client.Object, c client.Client,
 	// Determine if the intent defined in the modified object is going to trigger
 	// an actual change when running server side apply, and if this change might impact the object spec or not.
 	var hasChanges, hasSpecChanges bool
-	switch original {
-	case nil:
+	switch {
+	case isNil(original):
 		hasChanges, hasSpecChanges = true, true
 	default:
 		hasChanges, hasSpecChanges = dryRunPatch(&dryRunInput{

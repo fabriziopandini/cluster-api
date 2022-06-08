@@ -33,9 +33,6 @@ import (
 // server side apply operations for the topology controller.
 func getTopologyManagedFields(original client.Object) map[string]interface{} {
 	r := map[string]interface{}{}
-	if reflect.ValueOf(original).IsValid() && reflect.ValueOf(original).IsNil() {
-		return r
-	}
 
 	for _, m := range original.GetManagedFields() {
 		if m.Operation == metav1.ManagedFieldsOperationApply &&
