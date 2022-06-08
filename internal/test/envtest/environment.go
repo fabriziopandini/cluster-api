@@ -38,9 +38,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
@@ -60,6 +58,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/test/builder"
 	runtimewebhooks "sigs.k8s.io/cluster-api/internal/webhooks/runtime"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
+	"sigs.k8s.io/cluster-api/version"
 	"sigs.k8s.io/cluster-api/webhooks"
 )
 
@@ -120,23 +119,10 @@ func Run(ctx context.Context, input RunInput) int {
 	env.start(ctx)
 
 	if input.MinK8sVersion != "" {
-		client := discovery.NewDiscoveryClientForConfigOrDie(env.Config)
-		serverVersion, err := client.ServerVersion()
-		if err != nil {
-			_ = env.stop() // tearing down test env at best effort
-			panic(fmt.Sprintf("Failed to get the Kubernetes version for the test environment: %v", err))
-		}
-
-		compver, err := utilversion.MustParseGeneric(serverVersion.String()).Compare(input.MinK8sVersion)
-		if err != nil {
-			_ = env.stop() // tearing down test env at best effort
-			panic(fmt.Sprintf("Failed to check MinK8sVersion: %v", err))
-		}
-
-		if compver == -1 {
-			fmt.Printf("[IMPORTANT] skipping tests because the management cluster server version is %q - minimum required version is %q\n", serverVersion.String(), input.MinK8sVersion)
+		if err := version.CheckKubernetesVersion(env.Config, input.MinK8sVersion); err != nil {
+			fmt.Printf("[IMPORTANT] skipping tests after failing version check: %v\n", err)
 			if err := env.stop(); err != nil {
-				panic(fmt.Sprintf("Failed to stop the test environment: %v", err))
+				fmt.Println("[WARNING] Failed to stop the test environment")
 			}
 			return 0
 		}
