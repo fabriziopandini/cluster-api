@@ -1359,7 +1359,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 									"controllerManager": map[string]interface{}{
 										"extraArgs": map[string]interface{}{
 											"enable-hostpath-provisioner": "true",
-											// "foo":                         "bar",
 										},
 									},
 								},
@@ -1373,7 +1372,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 									"controllerManager": map[string]interface{}{
 										"extraArgs": map[string]interface{}{
 											"enable-hostpath-provisioner": "true",
-											// "foo":                         "bar",
 										},
 									},
 								},
@@ -1384,42 +1382,9 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 				reconcileStep{
 					name: "Drop enable-hostpath-provisioner",
 					desired: object{
-						/*
-							spec: map[string]interface{}{
-								"kubeadmConfigSpec": map[string]interface{}{
-									"clusterConfiguration": map[string]interface{}{
-										"controllerManager": map[string]interface{}{
-											"extraArgs": map[string]interface{}{
-												// "foo": "bar",
-											},
-										},
-									},
-								},
-							},
-						*/
 						spec: nil,
-						/*
-							spec: map[string]interface{}{
-								"kubeadmConfigSpec": map[string]interface{}{
-									"clusterConfiguration": map[string]interface{}{},
-								},
-							},
-						*/
 					},
 					want: object{
-						/*
-							spec: map[string]interface{}{
-								"kubeadmConfigSpec": map[string]interface{}{
-									"clusterConfiguration": map[string]interface{}{
-										"controllerManager": map[string]interface{}{
-											"extraArgs": map[string]interface{}{
-												// "foo": "bar",
-											},
-										},
-									},
-								},
-							},
-						*/
 						spec: nil,
 					},
 				},
@@ -1799,7 +1764,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 										"name":      "my-cluster",
 										"namespace": namespace.GetName(),
 									},
-									// "spec": step.desired.spec,
 								},
 							},
 						},
@@ -1824,7 +1788,6 @@ func TestReconcileReferencedObjectSequences(t *testing.T) {
 								"name":      "my-cluster",
 								"namespace": namespace.GetName(),
 							},
-							// "spec": step.want.spec,
 						},
 					}
 					if step.want.spec != nil {
