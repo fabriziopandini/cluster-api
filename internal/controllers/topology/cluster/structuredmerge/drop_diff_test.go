@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/contract"
 )
 
-func Test_dropChangesForNotAllowedPaths(t *testing.T) {
+func Test_dropDiffsForNotAllowedPaths(t *testing.T) {
 	tests := []struct {
 		name         string
 		ctx          *dropDiffInput
@@ -59,7 +59,7 @@ func Test_dropChangesForNotAllowedPaths(t *testing.T) {
 						"foo": "123-changed",
 					},
 				},
-				shouldDropChangeFunc: isNotAllowedPath(
+				shouldDropDiffFunc: isNotAllowedPath(
 					[]contract.Path{ // NOTE: we are dropping everything not in this list (IsNotAllowed)
 						{"metadata", "labels"},
 						{"metadata", "annotations"},
@@ -109,7 +109,7 @@ func Test_dropChangesForNotAllowedPaths(t *testing.T) {
 						"foo": "123",
 					},
 				},
-				shouldDropChangeFunc: isNotAllowedPath(
+				shouldDropDiffFunc: isNotAllowedPath(
 					[]contract.Path{ // NOTE: we are dropping everything not in this list (IsNotAllowed)
 						{"metadata", "labels"},
 						{"metadata", "annotations"},
@@ -145,7 +145,7 @@ func Test_dropChangesForNotAllowedPaths(t *testing.T) {
 						"foo": "123",
 					},
 				},
-				shouldDropChangeFunc: isNotAllowedPath(
+				shouldDropDiffFunc: isNotAllowedPath(
 					[]contract.Path{}, // NOTE: we are dropping everything not in this list (IsNotAllowed)
 				),
 			},
@@ -165,7 +165,7 @@ func Test_dropChangesForNotAllowedPaths(t *testing.T) {
 	}
 }
 
-func Test_dropChangesForIgnoredPaths(t *testing.T) {
+func Test_dropDiffsForIgnoredPaths(t *testing.T) {
 	tests := []struct {
 		name         string
 		ctx          *dropDiffInput
@@ -193,7 +193,7 @@ func Test_dropChangesForIgnoredPaths(t *testing.T) {
 						},
 					},
 				},
-				shouldDropChangeFunc: isIgnorePath(
+				shouldDropDiffFunc: isIgnorePath(
 					[]contract.Path{
 						{"spec", "controlPlaneEndpoint"},
 					},
@@ -225,7 +225,7 @@ func Test_dropChangesForIgnoredPaths(t *testing.T) {
 						},
 					},
 				},
-				shouldDropChangeFunc: isIgnorePath(
+				shouldDropDiffFunc: isIgnorePath(
 					[]contract.Path{
 						{"spec", "controlPlaneEndpoint"},
 					},
@@ -250,7 +250,7 @@ func Test_dropChangesForIgnoredPaths(t *testing.T) {
 						"foo": "123",
 					},
 				},
-				shouldDropChangeFunc: isIgnorePath(
+				shouldDropDiffFunc: isIgnorePath(
 					[]contract.Path{
 						{"spec", "foo"},
 					},
