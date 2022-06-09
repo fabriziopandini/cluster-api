@@ -90,7 +90,7 @@ func dryRunPatch(ctx *dryRunInput) (hasChanges, hasSpecChanges bool) {
 					continue
 				}
 
-				// Get the original value.
+				// Add the field to fieldPath.
 				fieldPath := ctx.path.Append(field)
 
 				// Get the managed field for this key.
@@ -114,6 +114,8 @@ func dryRunPatch(ctx *dryRunInput) (hasChanges, hasSpecChanges bool) {
 			// Process all the fields the corresponding managed field to identify fields previously managed being
 			// dropped from modified.
 			for fieldV1 := range ctx.fieldsV1 {
+				// Skip '.' which represent the field itself if empty. This is redundant information here because fieldV1 is
+				// part of ctx.fieldsV1.
 				if fieldV1 == "." {
 					continue
 				}
@@ -200,8 +202,8 @@ func dryRunPatch(ctx *dryRunInput) (hasChanges, hasSpecChanges bool) {
 	// Otherwise, the func is processing scalar or atomic values.
 
 	// Check if the field has been added (it wasn't managed before).
-	// NOTE: This prevents false positive when handling metadata, because it is required to have metadata.name and metadata.namespace
-	// in modified, but they are not tracked as managed field.
+	// NOTE: This prevents false positive when handling metadata. The fields metadata.name and metadata.namespace are
+	// always implicitly managed before, but this fields are not tracked as managed field.
 	notManagedBefore := ctx.fieldsV1 == nil
 	if len(ctx.path) == 1 && ctx.path[0] == "metadata" {
 		notManagedBefore = false
@@ -247,6 +249,7 @@ func getFieldV1Keys(v string) map[string]string {
 }
 
 // getItemKeys returns the keys value pairs for an item in the list.
+// e.g. given the {"foo": "id1"} keys and {"foo": "id1", "bar": "baz"} values it returns {"foo", "id1"}.
 func getItemKeys(keys map[string]string, values map[string]interface{}) map[string]string {
 	keyValues := map[string]string{}
 	for k := range keys {

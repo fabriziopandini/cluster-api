@@ -42,6 +42,7 @@ type serverSidePatchHelper struct {
 }
 
 // NewServerSidePatchHelper returns a new PatchHelper using server side apply.
+// The implementation does not support to patch the status of an object.
 func NewServerSidePatchHelper(original, modified client.Object, c client.Client, opts ...HelperOption) (PatchHelper, error) {
 	helperOptions := &HelperOptions{}
 	helperOptions = helperOptions.ApplyOptions(opts)
