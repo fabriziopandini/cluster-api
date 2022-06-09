@@ -87,7 +87,7 @@ func dryRunPatch(ctx *dryRunInput) (hasChanges, hasSpecChanges bool) {
 					continue
 				}
 
-				// Get the original value.
+				// Compute the field path.
 				fieldPath := ctx.path.Append(field)
 
 				// Get the managed field for this key.
@@ -111,6 +111,7 @@ func dryRunPatch(ctx *dryRunInput) (hasChanges, hasSpecChanges bool) {
 			// Process all the fields the corresponding managed field to identify fields previously managed being
 			// dropped from modified.
 			for fieldV1 := range ctx.fieldsV1 {
+				// Drops "." as it represent the parent field.
 				if fieldV1 == "." {
 					continue
 				}
@@ -244,6 +245,8 @@ func getFieldV1Keys(v string) map[string]string {
 }
 
 // getItemKeys returns the keys value pairs for an item in the list.
+// e.g. given keys {field1:id1} and values `"{field1:id2, foo:foo}"` it returns {field1:id2}.
+// NOTE: keys comes for managedFields, while values comes from the actual object.
 func getItemKeys(keys map[string]string, values map[string]interface{}) map[string]string {
 	keyValues := map[string]string{}
 	for k := range keys {
@@ -260,6 +263,7 @@ func getItemKeys(keys map[string]string, values map[string]interface{}) map[stri
 }
 
 // getItemWithKeys return the item in the list with the given keys or nil if any.
+// e.g. given l `"[{field1:id1, foo:foo}, {field1:id2, bar:bar}]"` and keys {field1:id1} it returns {field1:id1, foo:foo}.
 func getItemWithKeys(l []interface{}, keys map[string]string) map[string]interface{} {
 	for _, i := range l {
 		// NOTE: API server ensures the item in a listMap is a map.

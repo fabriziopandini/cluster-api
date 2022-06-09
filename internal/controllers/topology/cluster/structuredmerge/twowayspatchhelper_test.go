@@ -284,7 +284,7 @@ func TestNewHelper(t *testing.T) {
 		// Field only in modified (not existing in original) --> align to modified
 
 		{
-			name: "Field (spec.foo) in modified only, align to modified when different",
+			name: "Field (spec.foo) in modified only, align to modified",
 			original: &unstructured.Unstructured{ // current
 				Object: map[string]interface{}{},
 			},
@@ -300,7 +300,7 @@ func TestNewHelper(t *testing.T) {
 			wantPatch:          []byte("{\"spec\":{\"foo\":\"foo-changed\"}}"),
 		},
 		{
-			name: "Field (metadata.label) in modified only, align to modified when different",
+			name: "Field (metadata.label) in modified only, align to modified",
 			original: &unstructured.Unstructured{ // current
 				Object: map[string]interface{}{},
 			},

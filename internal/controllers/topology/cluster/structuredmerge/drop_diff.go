@@ -19,7 +19,7 @@ package structuredmerge
 import "sigs.k8s.io/cluster-api/internal/contract"
 
 // dropDiff allow to change the modified object so the generated patch will not contain changes
-// that match the shouldDropChange criteria.
+// that match the shouldDropDiff criteria.
 // NOTE: This func is called recursively only for fields of type Map, but this is ok given the current use cases
 // this func has to address. More specifically, we are using only for not allowed paths and for ignore paths;
 // all of them are defined in reconcile_state.go and are targeting well-known fields inside nested maps.
@@ -35,11 +35,11 @@ func dropDiff(ctx *dropDiffInput) {
 			original: original[field],
 			modified: modified[field],
 			// Carry over global values from the context.
-			shouldDropChangeFunc: ctx.shouldDropChangeFunc,
+			shouldDropDiffFunc: ctx.shouldDropDiffFunc,
 		}
 
 		// Note: for everything we should drop changes we are making modified equal to original, so the generated patch doesn't include this change
-		if fieldCtx.shouldDropChangeFunc(fieldCtx.path) {
+		if fieldCtx.shouldDropDiffFunc(fieldCtx.path) {
 			// If original exists, make modified equal to original, otherwise if original does not exist, drop the change.
 			if o, ok := original[field]; ok {
 				modified[field] = o
@@ -59,7 +59,7 @@ func dropDiff(ctx *dropDiffInput) {
 	}
 }
 
-// dropDiffInput holds info required while computing dropChange.
+// dropDiffInput holds info required while computing dropDiff.
 type dropDiffInput struct {
 	// the path of the field being processed.
 	path contract.Path
@@ -68,6 +68,6 @@ type dropDiffInput struct {
 	original interface{}
 	modified interface{}
 
-	// shouldDropChangeFunc handle the func that determine if the current path should be dropped or not.
-	shouldDropChangeFunc func(path contract.Path) bool
+	// shouldDropDiffFunc handle the func that determine if the current path should be dropped or not.
+	shouldDropDiffFunc func(path contract.Path) bool
 }

@@ -166,10 +166,10 @@ func applyOptions(in *applyOptionsInput) ([]byte, error) {
 	// Note: for everything not allowed it sets modified equal to original, so the generated patch doesn't include this change
 	if len(in.options.allowedPaths) > 0 {
 		dropDiff(&dropDiffInput{
-			path:                 contract.Path{},
-			original:             originalMap,
-			modified:             modifiedMap,
-			shouldDropChangeFunc: isNotAllowedPath(in.options.allowedPaths),
+			path:               contract.Path{},
+			original:           originalMap,
+			modified:           modifiedMap,
+			shouldDropDiffFunc: isNotAllowedPath(in.options.allowedPaths),
 		})
 	}
 
@@ -178,10 +178,10 @@ func applyOptions(in *applyOptionsInput) ([]byte, error) {
 	// Note: for everything ignored it sets  modified equal to original, so the generated patch doesn't include this change
 	if len(in.options.ignorePaths) > 0 {
 		dropDiff(&dropDiffInput{
-			path:                 contract.Path{},
-			original:             originalMap,
-			modified:             modifiedMap,
-			shouldDropChangeFunc: isIgnorePath(in.options.ignorePaths),
+			path:               contract.Path{},
+			original:           originalMap,
+			modified:           modifiedMap,
+			shouldDropDiffFunc: isIgnorePath(in.options.ignorePaths),
 		})
 	}
 

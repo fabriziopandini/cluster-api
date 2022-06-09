@@ -274,6 +274,8 @@ func TestServerSideApply(t *testing.T) {
 		g.Expect(v2).To(Equal("changed"))
 		v3, _, _ := unstructured.NestedString(got.Object, "status", "foo")
 		g.Expect(v3).To(Equal("changed"))
+		v4, _, _ := unstructured.NestedBool(got.Object, "status", "ready")
+		g.Expect(v4).To(Equal(true))
 
 		fieldV1 := getTopologyManagedFields(got)
 		g.Expect(fieldV1).ToNot(BeEmpty())
@@ -318,6 +320,8 @@ func TestServerSideApply(t *testing.T) {
 		g.Expect(v2).To(Equal("changed"))
 		v3, _, _ := unstructured.NestedString(got.Object, "status", "foo")
 		g.Expect(v3).To(Equal("changed"))
+		v4, _, _ := unstructured.NestedBool(got.Object, "status", "ready")
+		g.Expect(v4).To(Equal(true))
 	})
 
 	t.Run("Topology controller reconcile again with an opinion on a field managed by another controller (force ownership)", func(t *testing.T) {
@@ -372,7 +376,7 @@ func TestServerSideApply(t *testing.T) {
 		modified := obj2.DeepCopy()
 
 		// Create the object using server side apply
-		g.Expect(env.PatchAndWait(ctx, original, client.FieldOwner("topology"))).To(Succeed())
+		g.Expect(env.PatchAndWait(ctx, original, client.FieldOwner(TopologyManagerName))).To(Succeed())
 		// Get created object to have managed fields
 		g.Expect(env.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(original), original)).To(Succeed())
 

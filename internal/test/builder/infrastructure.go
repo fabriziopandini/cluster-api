@@ -80,6 +80,7 @@ func testInfrastructureClusterCRD(gvk schema.GroupVersionKind) *apiextensionsv1.
 				// General purpose fields to be used in different test scenario.
 				"foo": {Type: "string"},
 				"bar": {Type: "string"},
+				// Field for testing
 			},
 		},
 		"status": {

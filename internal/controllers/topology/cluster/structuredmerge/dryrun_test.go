@@ -189,7 +189,7 @@ func Test_dryRunPatch(t *testing.T) {
 			wantHasSpecChanges: false,
 		},
 		{
-			name: "DryRun detects identifies spec change on managed fields",
+			name: "DryRun spec only change on managed fields",
 			ctx: &dryRunInput{
 				path: contract.Path{},
 				fieldsV1: map[string]interface{}{
