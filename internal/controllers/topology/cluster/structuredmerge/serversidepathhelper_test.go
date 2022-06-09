@@ -362,14 +362,14 @@ func TestServerSideApply(t *testing.T) {
 		g.Expect(specFieldV1).To(HaveKey("f:bar"))                  // topology controller now has an opinion on a field previously managed by other controllers (force ownership).
 	})
 	t.Run("No-op on unstructured object having empty map[string]interface in spec", func(t *testing.T) {
-		// TODO: this should be either a unit test or a test with a typed CRD
 		g := NewWithT(t)
 
-		// Second test object having an empty map and slice as value
-		obj2 := builder.InfrastructureClusterTemplate(ns.Name, "obj2").WithSpecFields(map[string]interface{}{
-			"spec.emptyMap":   map[string]interface{}{},
-			"spec.emptySlice": []interface{}{}, // this field is then explicitly ignored by the patch helper
-		}).Build()
+		obj2 := builder.TestInfrastructureCluster(ns.Name, "obj2").
+			WithSpecFields(map[string]interface{}{
+				"spec.fooMap":  map[string]interface{}{},
+				"spec.fooList": []interface{}{},
+			}).
+			Build()
 
 		// create new object having an empty map[string]interface in spec and a copy of it for further testing
 		original := obj2.DeepCopy()
