@@ -106,7 +106,7 @@ Following paragraphs provide more details about the proposed changes.
 #### Propagation of metadata from ClusterClass and Cluster Topology
 
 This change ensure that metadata from ClusterClass and Cluster Topology propagate consistently, in the sense that each set of labels and
-annotations will be applyed in the same way to all the corresponding targets, more specifically:
+annotations will be applied in the same way to all the corresponding targets, more specifically:
 
 1. Metadata from ClusterClass.Spec.ControlPlane and Cluster.Spec.Topology.ControlPlane apply consistently to:
 - The ControlPlane object, e.g. KubeadmControlPlane (both top level metadata and spec.machineTemplate.metadata).
@@ -127,7 +127,7 @@ in order to support above propagation rules.
 
 #### Simplified Metadata propagation from MachineDeployment to MachineSet
 
-We are going to drop current behaviour inherithed from Kubernetes's Deployment controller, that computes top level labels in MachineSet
+We are going to drop current behaviour inherited from Kubernetes's Deployment controller, that computes top level labels in MachineSet
 using a different source from the one used for annotations. Instead we propose a more straight forward propagation:
 
 1. Top level metadata from MachineDeployment propagates to top level metadata in MachineSet.
@@ -151,24 +151,25 @@ Apart from labels and annotations, there are also other fields that flow downs f
 ultimately to Machines.
 
 Some of them can be considered like labels and annotations, because they have impacts only only Kubernetes objects or controller behaviour, but
-not on the Machine itself. Examples are `MinReadySeconds`, `NodeDrainTimeout`, `NodeVolumeDetachTimeout`, `NodeDeletionTimeout`.
+not on the actual machine itself (including infrastructure ande the software running on it). 
+Examples are `MinReadySeconds`, `NodeDrainTimeout`, `NodeVolumeDetachTimeout`, `NodeDeletionTimeout`.
 
-Propagation of changes to those fields will be implementated using the same [in place propagation](#in-place-propagation) mechanism implemented
-for metatada .
+Propagation of changes to those fields will be implemented using the same [in place propagation](#in-place-propagation) mechanism implemented
+for metadata .
 
 ### In place propagation
 
-With in place propagation we are referring to a mechanism that updates existing Kuberentes objects, like MachineSets or Machines, instead of
+With in place propagation we are referring to a mechanism that updates existing Kubernetes objects, like MachineSets or Machines, instead of
 creating a new instance with the updated info and deleting the current Kubernetes object.
 
 The main benefits of this approach is that it prevents unnecessary rollouts of the corresponding infrastructure, with the consequent creation/
-deletion of a Kubernetes node and drain/scheduling ofworkloads hosted on the machine being deleted.
+deletion of a Kubernetes node and drain/scheduling of workloads hosted on the machine being deleted.
 
 **Important!** in place propagation of changes as defined above applies only to metadata changes or to fields impacting only Kubernetes objects
-or controller behaviour. This approach can not be used to apply changes to the infrastucutre hosting a Machine, to the OS or any software
-installed on it, Kuberenetes components included (Kubelet, static pods, CRI).
+or controller behaviour. This approach can not be used to apply changes to the infrastructure hosting a Machine, to the OS or any software
+installed on it, Kubernetes components included (Kubelet, static pods, CRI etc.).
 
-Implememting in place propagation has two distinct challages:
+Implementing in place propagation has two distinct challenges:
 
 - Current rules defining when MachineDeployments or KubeadmControlPlane triggers a rollout should be modified in order to ignore metadata and
   other fields that are going to be propagated in place.
@@ -186,24 +187,24 @@ While implementing this proposal we should change the definition of "semantic eq
 should be updated in place.
 
 On top of that we should also account the use case where, after deploying the new "semantic equality" rule, there is already one or more
-MachineSet matchine the MachineDeployment; in this case Cluster API deterministically pick the oldest of them.
+MachineSet matching the MachineDeployment; in this case Cluster API deterministically pick the oldest of them.
 
 When exploring the solution for this proposal we discovered that the above approach can cause turbulence in the Cluster because it does not
-keep into account where the machines are, and as a consequence a Cluster API upgrage could lead to a rollout with machines moving from
+keep into account where the machines are, and as a consequence a Cluster API upgrade could lead to a rollout with machines moving from
 a "semantically equal" MachineSet to another, which is an unnecessary operation.
 
 In order to prevent this we are modifying the MachineDeployment controller in order to pick the "semantically equal" MachineSet with more
-machines on it, thus avoiding or minimizing turbolence in the Cluster.
+machines on it, thus avoiding or minimizing turbulence in the Cluster.
 
 ##### What about hash
 
-The MachineDeployment controller relyes on a label with an hash values to identify machines belonging to a MachineSet; also, the hash value
+The MachineDeployment controller relies on a label with an hash values to identify machines belonging to a MachineSet; also, the hash value
 is used as suffix for the MachineSet name.
 
-Currently the hash is computed using an alghoritm that consider the same set of information used to determine "semantic equality" between current
+Currently the hash is computed using an algorithm that consider the same set of information used to determine "semantic equality" between current
 MachineDeployment spec and the corresponding MachineSet spec.
 
-When exploring the solution for this proposal we decided above alghoritm can be simplified by using a simple random string
+When exploring the solution for this proposal we decided above algorithm can be simplified by using a simple random string
 plus a check that ensures that the random string is not already taken by an existing MachineSet (for this MachineDeployment).
 
 The main benefit of this change is that we are going to decouple "semantic equality" from computing a UID to be used for identifying machines
