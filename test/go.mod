@@ -8,19 +8,19 @@ require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/docker/docker v26.1.3+incompatible
 	github.com/docker/go-connections v0.5.0
-	github.com/emicklei/go-restful/v3 v3.12.0
+	github.com/emicklei/go-restful/v3 v3.12.1
 	github.com/evanphx/json-patch/v5 v5.9.0
 	github.com/flatcar/ignition v0.36.2
-	github.com/go-logr/logr v1.4.1
+	github.com/go-logr/logr v1.4.2
 	github.com/google/go-cmp v0.6.0
-	github.com/onsi/ginkgo/v2 v2.17.3
+	github.com/onsi/ginkgo/v2 v2.19.0
 	github.com/onsi/gomega v1.33.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.18.0
 	github.com/spf13/pflag v1.0.5
 	github.com/vincent-petithory/dataurl v1.0.0
-	go.etcd.io/etcd/api/v3 v3.5.13
-	go.etcd.io/etcd/client/v3 v3.5.13
+	go.etcd.io/etcd/api/v3 v3.5.14
+	go.etcd.io/etcd/client/v3 v3.5.14
 	golang.org/x/net v0.25.0
 	google.golang.org/grpc v1.60.1
 	k8s.io/api v0.30.1
@@ -32,7 +32,7 @@ require (
 	k8s.io/klog/v2 v2.120.1
 	k8s.io/utils v0.0.0-20231127182322-b307cd553661
 	sigs.k8s.io/cluster-api v0.0.0-00010101000000-000000000000
-	sigs.k8s.io/controller-runtime v0.18.2
+	sigs.k8s.io/controller-runtime v0.18.3
 	sigs.k8s.io/kind v0.23.0
 	sigs.k8s.io/yaml v1.4.0
 )
@@ -138,7 +138,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/valyala/fastjson v1.6.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.5.13 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.5.14 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.0 // indirect
 	go.opentelemetry.io/otel v1.22.0 // indirect
@@ -160,7 +160,7 @@ require (
 	golang.org/x/term v0.20.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.20.0 // indirect
+	golang.org/x/tools v0.21.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/genproto v0.0.0-20231106174013-bbf56f31fb17 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20231106174013-bbf56f31fb17 // indirect
