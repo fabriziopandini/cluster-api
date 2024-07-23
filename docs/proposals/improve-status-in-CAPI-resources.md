@@ -342,8 +342,8 @@ Below the Go types, you can find a summary table that also shows how changes wil
 
 ```go
 type MachineSpec struct {
-    
-    // MinReadySeconds is the minimum number of seconds for which a Node for a newly created machine should be ready before considering the replica available.
+
+    // MinReadySeconds is the minimum number of seconds for which a Machine should be ready before considering the replica available.
     // Defaults to 0 (machine will be considered available as soon as the Node is ready)
     // +optional
     MinReadySeconds int32 `json:"minReadySeconds,omitempty"`
@@ -419,6 +419,10 @@ type MachineSetStatus struct {
     // The number of ready replicas for this MachineSet. A machine is considered ready when Machine's Ready condition is true.
     // +optional
     ReadyReplicas int32 `json:"readyReplicas"`
+	
+	// The number of available replicas for this MachineSet. A machine is considered available when Machine's Available condition is true.
+	// +optional
+	AvailableReplicas int32 `json:"availableReplicas"`
 
     // The number of up-to-date replicas for this MachineSet. A machine is considered up-to-date when Machine's UpToDate condition is true.
     // +optional
@@ -435,17 +439,19 @@ type MachineSetStatus struct {
 }
 ```
 
-| v1beta1 (current)                | v1beta2 (tentative Q1 2025)                              | v1beta1 removal (tentative Q1 2026) |
-|----------------------------------|----------------------------------------------------------|-------------------------------------|
-|                                  | `BackCompatibilty` (new)                                 | (removed)                           |
-| `ReadyReplicas` (deprecated)     | `BackCompatibilty.ReadyReplicas` (renamed) (deprecated)  | (removed)                           |
-| `ExprimentalReadyReplicas` (new) | `ReadyReplicas` (renamed)                                | `ReadyReplicas`                     |
-| `FailureReason` (deprecated)     | `BackCompatibilty.FailureReason` (renamed) (deprecated)  | (removed)                           |
-| `FailureMessage` (deprecated)    | `BackCompatibilty.FailureMessage` (renamed) (deprecated) | (removed)                           |
-| `Conditions`                     | `BackCompatibilty.Conditions` (renamed) (deprecated)     | (removed)                           |
-| `ExperimentalConditions` (new)   | `Conditions` (renamed)                                   | `Conditions`                        |
-| `UpToDateReplicas` (new)         | `UpToDateReplicas`                                       | `UpToDateReplicas`                  |
-| other fields...                  | other fields...                                          | other fields...                     |
+| v1beta1 (current)                    | v1beta2 (tentative Q1 2025)                                 | v1beta1 removal (tentative Q1 2026) |
+|--------------------------------------|-------------------------------------------------------------|-------------------------------------|
+| `ExprimentalReadyReplicas` (new)     | `ReadyReplicas` (renamed)                                   | `ReadyReplicas`                     |
+| `ExprimentalAvailableReplicas` (new) | `AvailableReplicas` (renamed)                               | `AvailableReplicas`                 |
+|                                      | `BackCompatibilty` (new)                                    | (removed)                           |
+| `ReadyReplicas` (deprecated)         | `BackCompatibilty.ReadyReplicas` (renamed) (deprecated)     | (removed)                           |
+| `AvailableReplicas` (deprecated)     | `BackCompatibilty.AvailableReplicas` (renamed) (deprecated) | (removed)                           |
+| `FailureReason` (deprecated)         | `BackCompatibilty.FailureReason` (renamed) (deprecated)     | (removed)                           |
+| `FailureMessage` (deprecated)        | `BackCompatibilty.FailureMessage` (renamed) (deprecated)    | (removed)                           |
+| `Conditions`                         | `BackCompatibilty.Conditions` (renamed) (deprecated)        | (removed)                           |
+| `ExperimentalConditions` (new)       | `Conditions` (renamed)                                      | `Conditions`                        |
+| `UpToDateReplicas` (new)             | `UpToDateReplicas`                                          | `UpToDateReplicas`                  |
+| other fields...                      | other fields...                                             | other fields...                     |
 
 Notes:
 - The `BackCompatibilty` struct is going to exist in v1beta2 types only until v1beta1 removal (9 months or 3 minor releases after v1beta2 is released/v1beta1 is deprecated, whichever is longer).
@@ -519,6 +525,14 @@ After golang types, you can find a summary table that also shows how changes wil
 ```golang
 type MachineDeploymentStatus struct {
 
+    // The number of ready replicas for this MachineDeployment. A machine is considered ready when Machine's Ready condition is true.
+    // +optional
+    ReadyReplicas int32 `json:"readyReplicas"`
+
+	// The number of available replicas for this MachineDeployment. A machine is considered available when Machine's Available condition is true.
+    // +optional
+    AvailableReplicas int32 `json:"availableReplicas"`
+
     // The number of up-to-date replicas targeted by this deployment.
     // +optional
     UpToDateReplicas int32 `json:"upToDateReplicas"`
@@ -534,15 +548,20 @@ type MachineDeploymentStatus struct {
 }
 ```
 
-| v1beta1 (current)              | v1beta2 (tentative Q1 2025)                              | v1beta1 removal (tentative Q1 2026) |
-|--------------------------------|----------------------------------------------------------|-------------------------------------|
-| `UpdatedReplicas`              | `UpToDateReplicas` (renamed)                             | `UpToDateReplicas`                  |
-| `Phase` (deprecated)           | `BackCompatibilty.Phase` (renamed) (deprecated)          | (removed)                           |
-| `FailureReason` (deprecated)   | `BackCompatibilty.FailureReason` (renamed) (deprecated)  | (removed)                           |
-| `FailureMessage` (deprecated)  | `BackCompatibilty.FailureMessage` (renamed) (deprecated) | (removed)                           |
-| `Conditions`                   | `BackCompatibilty.Conditions` (renamed) (deprecated)     | (removed)                           |
-| `ExperimentalConditions` (new) | `Conditions` (renamed)                                   | `Conditions`                        |
-| other fields...                | other fields...                                          | other fields...                     |
+| v1beta1 (current)                    | v1beta2 (tentative Q1 2025)                                 | v1beta1 removal (tentative Q1 2026) |
+|--------------------------------------|-------------------------------------------------------------|-------------------------------------|
+| `UpdatedReplicas`                    | `UpToDateReplicas` (renamed)                                | `UpToDateReplicas`                  |
+| `ExprimentalReadyReplicas` (new)     | `ReadyReplicas` (renamed)                                   | `ReadyReplicas`                     |
+| `ExprimentalAvailableReplicas` (new) | `AvailableReplicas` (renamed)                               | `AvailableReplicas`                 |
+|                                      | `BackCompatibilty` (new)                                    | (removed)                           |
+| `ReadyReplicas` (deprecated)         | `BackCompatibilty.ReadyReplicas` (renamed) (deprecated)     | (removed)                           |
+| `AvailableReplicas` (deprecated)     | `BackCompatibilty.AvailableReplicas` (renamed) (deprecated) | (removed)                           |
+| `Phase` (deprecated)                 | `BackCompatibilty.Phase` (renamed) (deprecated)             | (removed)                           |
+| `FailureReason` (deprecated)         | `BackCompatibilty.FailureReason` (renamed) (deprecated)     | (removed)                           |
+| `FailureMessage` (deprecated)        | `BackCompatibilty.FailureMessage` (renamed) (deprecated)    | (removed)                           |
+| `Conditions`                         | `BackCompatibilty.Conditions` (renamed) (deprecated)        | (removed)                           |
+| `ExperimentalConditions` (new)       | `Conditions` (renamed)                                      | `Conditions`                        |
+| other fields...                      | other fields...                                             | other fields...                     |
 
 Notes:
 - The `BackCompatibilty` struct is going to exist in v1beta2 types only until v1beta1 removal (9 months or 3 minor releases after v1beta2 is released/v1beta1 is deprecated, whichever is longer).
@@ -668,10 +687,6 @@ type ClusterControlPlaneStatus struct {
     // Total number of available control plane machines in this cluster.
     // +optional
     AvailableReplicas int32 `json:"availableReplicas"`
-    
-    // Total number of unavailable control plane machines in this cluster.
-    // +optional
-    UnavailableReplicas int32 `json:"unavailableReplicas"`
 }
 
 // WorkersPlaneStatus groups all the observations about workers current state.
@@ -695,10 +710,6 @@ type WorkersPlaneStatus struct {
     // Total number of available worker machines in this cluster.
     // +optional
     AvailableReplicas int32 `json:"availableReplicas"`
-    
-    // Total number of unavailable worker machines in this cluster.
-    // +optional
-    UnavailableReplicas int32 `json:"unavailableReplicas"`
 }
 ```
 
@@ -721,14 +732,12 @@ type WorkersPlaneStatus struct {
 | `ControlPlane.ReadyReplicas` (new)       | `ControlPlane.ReadyReplicas`                             | `ControlPlane.ReadyReplicas`               |
 | `ControlPlane.UpToDateReplicas` (new)    | `ControlPlane.UpToDateReplicas`                          | `ControlPlane.UpToDateReplicas`            |
 | `ControlPlane.AvailableReplicas` (new)   | `ControlPlane.AvailableReplicas`                         | `ControlPlane.AvailableReplicas`           |
-| `ControlPlane.UnavailableReplicas` (new) | `ControlPlane.UnavailableReplicas`                       | `ControlPlane.UnavailableReplicas`         |
 | `Workers` (new)                          | `Workers`                                                | `Workers`                                  |
 | `Workers.DesiredReplicas` (new)          | `Workers.DesiredReplicas`                                | `Workers.DesiredReplicas`                  |
 | `Workers.Replicas` (new)                 | `Workers.Replicas`                                       | `Workers.Replicas`                         |
 | `Workers.ReadyReplicas` (new)            | `Workers.ReadyReplicas`                                  | `Workers.ReadyReplicas`                    |
 | `Workers.UpToDateReplicas` (new)         | `Workers.UpToDateReplicas`                               | `Workers.UpToDateReplicas`                 |
 | `Workers.AvailableReplicas` (new)        | `Workers.AvailableReplicas`                              | `Workers.AvailableReplicas`                |
-| `Workers.UnavailableReplicas` (new)      | `Workers.UnavailableReplicas`                            | `Workers.UnavailableReplicas`              |
 | other fields...                          | other fields...                                          | other fields...                            |
 
 notes:
@@ -741,7 +750,8 @@ notes:
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `Available`               | True if Cluster `RemoteConnectionProbe` is true, if Cluster's control plane `Available` condition is true, if all MachineDeployment and MachinePool's `Available` condition are true; if conditions are defined in `spec.availabilityGates`, those conditions should be true as well for the Cluster to be available. |
 | `ControlPlaneInitialized` | True when the Cluster's control plane is functional enough to accept requests. This information is usually used as a signal for starting all the provisioning operations that depends on a functional API server, but do not require a full HA control plane to exists.                                               |
-| `RemoteConnectionProbe`   | True when control plane can be reached; in case of connection problems, the condition turns to false only if the the cluster cannot be reached for 40s after the first connection problem is detected (or whatever period is defined in the `--cluster-probe-grace-period` flag) the cluster cannot be reached        |
+| `RemoteConnectionProbe`   | True when control plane can be reached; in case of connection problems, the condition turns to false only if the the cluster cannot be reached for 40s after the first connection problem is detected (or whatever period is defined in the `--remote-connection-grace-period` flag) the cluster cannot be reached    |
+| `InfrastructureReady`     | Mirror of Cluster's infrastructure `Ready` condition                                                                                                                                                                                                                                                                  |
 | `ControlPlaneAvailable`   | Mirror of Cluster's control plane `Available` condition                                                                                                                                                                                                                                                               |
 | `WorkersAvaiable`         | Summary of MachineDeployment and MachinePool's `Available` condition                                                                                                                                                                                                                                                  |
 | `TopologyReconciled`      |                                                                                                                                                                                                                                                                                                                       |
@@ -758,8 +768,8 @@ notes:
 Notes:
 - `TopologyReconciled` exists only for classy clusters; this condition is managed by the topology reconciler.
 - Cluster API is going to maintain a `lastRemoteConnectionProbeTime` and use it in combination with the
-  `--cluster-probe-grace-period` flag to avoid flakes on `RemoteConnectionProbe`.
-- Similarly to `lastHeartbeatTime` in Kubernetes conditions, also `lastControlPlaneProbeTime` will not surface on the 
+  `--remote-connection-grace-period` flag to avoid flakes on `RemoteConnectionProbe`.
+- Similarly to `lastHeartbeatTime` in Kubernetes conditions, also `lastRemoteConnectionProbeTime` will not surface on the 
   API in order to avoid costly, continuous reconcile events.
 
 #### Cluster Spec
@@ -776,10 +786,12 @@ After golang types, you can find a summary table that also shows how changes wil
 
 ```golang
 type ClusterSpec struct {
-    // If specified, all availability gates will be evaluated for Cluster readiness.
-    // A Cluster is available when True if Cluster `ControlHeartbeat` and `TopologyReconciled` are true, if Cluster's 
-    // control plane `Available` condition is true, if all worker resource's `Available` condition are true;
-    // if conditions are defined in `spec.availabilityGates` are defined, those conditions should be true as well.
+    // AvailabilityGates specifies additional conditions to include when evaluating Cluster availability.
+    // A Cluster is available if:
+	// * Cluster's `RemoteConnectionProbe` and `TopologyReconciled` conditions are true and
+	// * the control plane `Available` condition is true and
+	// * all worker resource's `Available` conditions are true and
+    // * all conditions defined in AvailabilityGates are true as well.
     // +optional
     // +listType=map
     // +listMapKey=conditionType
