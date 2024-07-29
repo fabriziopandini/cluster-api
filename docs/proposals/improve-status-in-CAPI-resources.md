@@ -177,7 +177,7 @@ conditions.
 However, over time Cluster API maintainers recognized several limitations of the “one fits all”, strict approach.
 
 E.g., higher level abstractions in Cluster API are designed to remain operational during lifecycle operations,
-for instance a MachineDeployment is operational even if is rolling out.
+for instance a MachineDeployment is operational even if it is rolling out.
 
 But the use cases above were hard to combine with the strict requirement to have all the conditions true, and
 as a result today Cluster API resources barely have conditions surfacing that lifecycle operations are happening, or where
@@ -385,14 +385,14 @@ type MachineSpec struct {
     // If specified, all conditions listed in ReadinessGates will be evaluated for Machine readiness.
     // A Machine is ready when `BootstrapConfigReady`, `InfrastructureReady`, `NodeHealthy` and `HealthCheckSucceeded` (if present) are "True"; 
     // if other conditions are defined in this field, those conditions should be "True" as well for the Machine to be ready.
-	//
-	// This field can be used e.g. 
-	// - By Cluster API control plane providers to extend the semantic of the Ready condition for the Machine they
-	//   control, like the kubeadm control provider adding ReadinessGates for the APIServerPodHealthy, SchedulerPodHealthy conditions, etc.
+    //
+    // This field can be used e.g.
+    // - By Cluster API control plane providers to extend the semantic of the Ready condition for the Machine they
+    //   control, like the kubeadm control provider adding ReadinessGates for the APIServerPodHealthy, SchedulerPodHealthy conditions, etc.
     // - By external controllers, e.g. responsible to install special software/hardware on the Machines
-	//   to include the status of those components into ReadinessGates (by surfacing new conditions on Machines and 
-	//   adding them to ReadinessGates).
-	//
+    //   to include the status of those components into ReadinessGates (by surfacing new conditions on Machines and
+    //   adding them to ReadinessGates).
+    //
     // +optional
     // +listType=map
     // +listMapKey=conditionType
@@ -452,7 +452,7 @@ Notes:
 
 Following changes are implemented to MachineSet's status:
 
-- Update `ReadyReplicas` counter to use the same semantic as Machine's `Ready` (today it is computed based on the Node `Ready` condition) condition and add missing `UpToDateReplicas`.
+- Update `ReadyReplicas` counter to use the same semantic as Machine's `Ready` condition (today it is computed based on the Node `Ready` condition) and add missing `UpToDateReplicas`.
 - Remove `FailureReason` and `FailureMessage` to get rid of the confusing concept of terminal failures
 - Transition to new, improved, K8s API conventions aligned conditions
 
@@ -527,7 +527,7 @@ Notes:
 - Conditions like `ScalingUp`, `ScalingDown`, `Remediating` are intended to provide visibility on the corresponding lifecycle operation.
   e.g. If the scaling down operation is being blocked by a machine having issues while deleting, this should surface with a reason/message in
   the `ScalingDown` condition.
-- MachineSet conditions are intentionally mostly consistent with MachineDeployment conditions to help users troubleshooting .
+- MachineSet conditions are intentionally mostly consistent with MachineDeployment conditions to help users troubleshooting.
 - MachineSet is considered as a sort of implementation detail of MachineDeployments, so it doesn't have its own concept of availability.
   Similarly, this proposal is dropping the notion of MachineSet readiness because it is preferred to let users focus on Machines readiness.
 - When implementing this proposal `UpToDate` condition will be `false` for older MachineSet, `true` for the current MachineSet; 
@@ -1045,7 +1045,7 @@ type MachinePoolStatus struct {
     // The value of those fields is never updated after provisioning is completed.
     // Use conditions to monitor the operational state of the MachinePool.
     // +optional
-    Initialization *MachineInitializationStatus `json:"initialization,omitempty"`
+    Initialization *MachinePoolInitializationStatus `json:"initialization,omitempty"`
     
     // Conditions represent the observations of a MachinePool's current state.
     // +optional
@@ -1174,7 +1174,7 @@ a mechanism that allows providers to adapt to a new contract incrementally, more
 
 Additionally:
 
-- Providers implementing conditions won't be required to do the transition from custom Cluster API custom Condition type
+- Providers implementing conditions won't be required to do the transition from custom Cluster API Condition type
   to Kubernetes `metav1.Conditions` type (but this transition is recommended because it improves the consistency of each provider
   with Kubernetes, Cluster API and the ecosystem).
 
@@ -1302,7 +1302,7 @@ proposal address those use cases.
 
 As a cluster admin with MachineDeployment ownership I'd like to understand if my MD is performing a rolling upgrade and why by looking at the MD status/conditions
 
-> The main signal for MD is performing a rolling upgrade will be `MD.Status.Conditions[UpToDate]` false.
+> The main signal for MD is performing a rolling upgrade will be `MD.Status.Conditions[UpToDate]`.
 
 > At least in the first iteration there won't be a signal at MD level about why rollout is happening, because controlled machines might
 > have different reasons why they are not UpToDate (and the admin can check those conditions by looking at single machines).
