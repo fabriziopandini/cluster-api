@@ -17,12 +17,14 @@ limitations under the License.
 package v1beta1
 
 import (
+	"fmt"
 	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	strategicmergepatch "k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
 // ClusterClassKind represents the Kind of ClusterClass.
@@ -69,11 +71,19 @@ type ClusterClassSpec struct {
 	// +optional
 	Variables []ClusterClassVariable `json:"variables,omitempty"`
 
+	SMTest ClusterClassExperiment `json:"smTest,omitempty"`
+
 	// Patches defines the patches which are applied to customize
 	// referenced templates of a ClusterClass.
 	// Note: Patches will be applied in the order of the array.
 	// +optional
 	Patches []ClusterClassPatch `json:"patches,omitempty"`
+}
+
+type ClusterClassExperiment struct {
+	Before []ClusterVariable `json:"before,omitempty"`
+	Patch  []ClusterVariable `json:"patch,omitempty"`
+	After  []ClusterVariable `json:"after,omitempty"`
 }
 
 // ControlPlaneClass defines the class for the control plane.
@@ -583,6 +593,133 @@ type JSONSchemaProps struct {
 	// It can be used to add additional data for higher level tools.
 	// +optional
 	XMetadata *VariableSchemaMetadata `json:"x-metadata,omitempty"`
+
+	XPatchMergeKey *string `json:"x-kubernetes-patch-merge-key,omitempty"`
+	XPatchStrategy *string `json:"x-kubernetes-patch-strategy,omitempty"`
+
+	XListType   *string `json:"x-kubernetes-list-type,omitempty"`
+	XListMapKey *string `json:"x-kubernetes-list-map-keys,omitempty"`
+}
+
+type PatchMetaForVariable struct {
+	Path   string
+	Schema *JSONSchemaProps
+}
+
+func NewPatchMetaForVariable(name string, schema *JSONSchemaProps) PatchMetaForVariable {
+	return PatchMetaForVariable{
+		Schema: &JSONSchemaProps{Properties: map[string]JSONSchemaProps{
+			name: *schema,
+		}},
+	}
+}
+
+func (s PatchMetaForVariable) traverse(key string) (PatchMetaForVariable, error) {
+	path := key
+	if s.Path != "" {
+		path = s.Path + "." + key
+	}
+
+	// Schema might be nil when working with data nested to a field with XPreserveUnknownFields.
+	// In this case, just keep navigating the data.
+	if s.Schema == nil {
+		return PatchMetaForVariable{Path: path}, nil
+	}
+
+	if subSchema, ok := s.Schema.Properties[key]; ok {
+		return PatchMetaForVariable{Schema: &subSchema, Path: path}, nil
+	}
+
+	// Tolerate no properties found only for field with XPreserveUnknownFields.
+	if s.Schema.XPreserveUnknownFields {
+		return PatchMetaForVariable{Path: path}, nil
+	}
+	return PatchMetaForVariable{}, fmt.Errorf("unable to find api field \"%s\"", key)
+}
+
+func (s PatchMetaForVariable) LookupPatchMetadataForStruct(key string) (strategicmergepatch.LookupPatchMeta, strategicmergepatch.PatchMeta, error) {
+	l, err := s.traverse(key)
+	if err != nil {
+		return l, strategicmergepatch.PatchMeta{}, err
+	}
+
+	p := strategicmergepatch.PatchMeta{}
+
+	// Schema might be nil when working with data nested to a field with XPreserveUnknownFields.
+	// No patch metadata are available in this case.
+	if l.Schema == nil {
+		return l, p, nil
+	}
+
+	if l.Schema.XListType != nil {
+		switch *l.Schema.XListType {
+		case "set":
+			p.SetPatchStrategies([]string{"merge"})
+		case "map":
+			if l.Schema.XListMapKey != nil {
+				p.SetPatchStrategies([]string{"merge"})
+				p.SetPatchMergeKey(*l.Schema.XListMapKey)
+			}
+		}
+	}
+
+	/*
+		if l.Schema.XPatchMergeKey != nil {
+			p.SetPatchMergeKey(*l.Schema.XPatchMergeKey)
+		}
+		if l.Schema.XPatchStrategy != nil {
+			p.SetPatchStrategies(strings.Split(*l.Schema.XPatchStrategy, ","))
+		}
+	*/
+
+	return l, p, nil
+}
+
+func (s PatchMetaForVariable) LookupPatchMetadataForSlice(key string) (strategicmergepatch.LookupPatchMeta, strategicmergepatch.PatchMeta, error) {
+	l, err := s.traverse(key)
+	if err != nil {
+		return l, strategicmergepatch.PatchMeta{}, err
+	}
+
+	p := strategicmergepatch.PatchMeta{}
+
+	// Schema might be nil when working with data nested to a field with XPreserveUnknownFields.
+	// No patch metadata are available in this case.
+	if l.Schema == nil {
+		return l, p, nil
+	}
+
+	if l.Schema.XListType != nil {
+		switch *l.Schema.XListType {
+		case "set":
+			p.SetPatchStrategies([]string{"merge"})
+		case "map":
+			if l.Schema.XListMapKey != nil {
+				p.SetPatchStrategies([]string{"merge"})
+				p.SetPatchMergeKey(*l.Schema.XListMapKey)
+			}
+		}
+	}
+
+	/*
+		if l.Schema.XPatchMergeKey != nil {
+			p.SetPatchMergeKey(*l.Schema.XPatchMergeKey)
+		}
+		if l.Schema.XPatchStrategy != nil {
+			p.SetPatchStrategies(strings.Split(*l.Schema.XPatchStrategy, ","))
+		}
+	*/
+
+	if l.Schema.Items != nil {
+		l.Path = l.Path + "[]"
+		l.Schema = l.Schema.Items
+	}
+
+	return l, p, nil
+}
+
+func (s PatchMetaForVariable) Name() string {
+	return s.Path
 }
 
 // VariableSchemaMetadata is the metadata of a variable or a nested field within a variable.

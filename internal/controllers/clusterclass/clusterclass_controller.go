@@ -18,6 +18,7 @@ package clusterclass
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -25,12 +26,14 @@ import (
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
+	strategicmergepatch "k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -130,6 +133,63 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 }
 
 func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.ClusterClass) error {
+
+	clusterClass.Spec.SMTest.After = []clusterv1.ClusterVariable{}
+	for _, variablePatch := range clusterClass.Spec.SMTest.Patch {
+		var beforeValue *clusterv1.ClusterVariable
+		for _, b := range clusterClass.Spec.SMTest.Before {
+			if b.Name == variablePatch.Name {
+				beforeValue = &b
+				break
+			}
+		}
+		if beforeValue == nil {
+			beforeValue = &clusterv1.ClusterVariable{
+				Name:  variablePatch.Name,
+				Value: apiextensionsv1.JSON{Raw: []byte("{}")},
+			}
+		}
+
+		beforeValueBytes, err := toWrappedBytes(beforeValue)
+		if err != nil {
+			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			continue
+		}
+
+		var variableDefinition *clusterv1.ClusterClassVariable
+		for _, v := range clusterClass.Spec.Variables {
+			if v.Name == variablePatch.Name {
+				variableDefinition = &v
+				break
+			}
+		}
+		if variableDefinition == nil {
+			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte("{ \"error\": \"cannot find schema for this variable\" }")}})
+			continue
+		}
+
+		patchBytes, err := toWrappedBytes(&variablePatch)
+		if err != nil {
+			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			continue
+		}
+
+		patchMeta := clusterv1.NewPatchMetaForVariable(variablePatch.Name, &variableDefinition.Schema.OpenAPIV3Schema)
+		result, err := strategicmergepatch.StrategicMergePatchUsingLookupPatchMeta(beforeValueBytes, patchBytes, patchMeta)
+		if err != nil {
+			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			continue
+		}
+
+		unwrappedResult, err := toUnwrappedBytes(&variablePatch, result)
+		if err != nil {
+			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			continue
+		}
+
+		clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: unwrappedResult}})
+	}
+
 	if err := r.reconcileVariables(ctx, clusterClass); err != nil {
 		return err
 	}
@@ -141,6 +201,43 @@ func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.Clus
 	reconcileConditions(clusterClass, outdatedRefs)
 
 	return nil
+}
+
+func toWrappedBytes(variable *clusterv1.ClusterVariable) ([]byte, error) {
+	var value interface{}
+	if err := json.Unmarshal(variable.Value.Raw, &value); err != nil {
+		return nil, err
+	}
+
+	// Structural schema defaulting does not work with scalar values,
+	// so we wrap the schema and the variable in objects.
+	// <variable-name>: <variable-value>
+	wrappedValue := map[string]interface{}{
+		variable.Name: value,
+	}
+
+	b, err := json.Marshal(wrappedValue)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func toUnwrappedBytes(variable *clusterv1.ClusterVariable, result []byte) ([]byte, error) {
+	var wrappedValue map[string]interface{}
+	if err := json.Unmarshal(result, &wrappedValue); err != nil {
+		return nil, err
+	}
+
+	value := wrappedValue[variable.Name]
+	// TODO handle if variable.Name does not exist
+
+	b, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
 }
 
 func (r *Reconciler) reconcileExternalReferences(ctx context.Context, clusterClass *clusterv1.ClusterClass) (map[*corev1.ObjectReference]*corev1.ObjectReference, error) {

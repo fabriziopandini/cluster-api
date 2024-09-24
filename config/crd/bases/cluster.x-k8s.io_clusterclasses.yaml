@@ -964,6 +964,99 @@ spec:
                   - name
                   type: object
                 type: array
+              smTest:
+                properties:
+                  after:
+                    items:
+                      description: |-
+                        ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a
+                        Variable definition in the ClusterClass `status` variables.
+                      properties:
+                        definitionFrom:
+                          description: |-
+                            DefinitionFrom specifies where the definition of this Variable is from.
+
+                            Deprecated: This field is deprecated, must not be set anymore and is going to be removed in the next apiVersion.
+                          type: string
+                        name:
+                          description: Name of the variable.
+                          type: string
+                        value:
+                          description: |-
+                            Value of the variable.
+                            Note: the value will be validated against the schema of the corresponding ClusterClassVariable
+                            from the ClusterClass.
+                            Note: We have to use apiextensionsv1.JSON instead of a custom JSON type, because controller-tools has a
+                            hard-coded schema for apiextensionsv1.JSON which cannot be produced by another type via controller-tools,
+                            i.e. it is not possible to have no type field.
+                            Ref: https://github.com/kubernetes-sigs/controller-tools/blob/d0e03a142d0ecdd5491593e941ee1d6b5d91dba6/pkg/crd/known_types.go#L106-L111
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - name
+                      - value
+                      type: object
+                    type: array
+                  before:
+                    items:
+                      description: |-
+                        ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a
+                        Variable definition in the ClusterClass `status` variables.
+                      properties:
+                        definitionFrom:
+                          description: |-
+                            DefinitionFrom specifies where the definition of this Variable is from.
+
+                            Deprecated: This field is deprecated, must not be set anymore and is going to be removed in the next apiVersion.
+                          type: string
+                        name:
+                          description: Name of the variable.
+                          type: string
+                        value:
+                          description: |-
+                            Value of the variable.
+                            Note: the value will be validated against the schema of the corresponding ClusterClassVariable
+                            from the ClusterClass.
+                            Note: We have to use apiextensionsv1.JSON instead of a custom JSON type, because controller-tools has a
+                            hard-coded schema for apiextensionsv1.JSON which cannot be produced by another type via controller-tools,
+                            i.e. it is not possible to have no type field.
+                            Ref: https://github.com/kubernetes-sigs/controller-tools/blob/d0e03a142d0ecdd5491593e941ee1d6b5d91dba6/pkg/crd/known_types.go#L106-L111
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - name
+                      - value
+                      type: object
+                    type: array
+                  patch:
+                    items:
+                      description: |-
+                        ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a
+                        Variable definition in the ClusterClass `status` variables.
+                      properties:
+                        definitionFrom:
+                          description: |-
+                            DefinitionFrom specifies where the definition of this Variable is from.
+
+                            Deprecated: This field is deprecated, must not be set anymore and is going to be removed in the next apiVersion.
+                          type: string
+                        name:
+                          description: Name of the variable.
+                          type: string
+                        value:
+                          description: |-
+                            Value of the variable.
+                            Note: the value will be validated against the schema of the corresponding ClusterClassVariable
+                            from the ClusterClass.
+                            Note: We have to use apiextensionsv1.JSON instead of a custom JSON type, because controller-tools has a
+                            hard-coded schema for apiextensionsv1.JSON which cannot be produced by another type via controller-tools,
+                            i.e. it is not possible to have no type field.
+                            Ref: https://github.com/kubernetes-sigs/controller-tools/blob/d0e03a142d0ecdd5491593e941ee1d6b5d91dba6/pkg/crd/known_types.go#L106-L111
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - name
+                      - value
+                      type: object
+                    type: array
+                type: object
               variables:
                 description: |-
                   Variables defines the variables which can be configured
@@ -1149,6 +1242,14 @@ spec:
                                 UniqueItems specifies if items in an array must be unique.
                                 NOTE: Can only be set if type is array.
                               type: boolean
+                            x-kubernetes-list-map-keys:
+                              type: string
+                            x-kubernetes-list-type:
+                              type: string
+                            x-kubernetes-patch-merge-key:
+                              type: string
+                            x-kubernetes-patch-strategy:
+                              type: string
                             x-kubernetes-preserve-unknown-fields:
                               description: |-
                                 XPreserveUnknownFields allows setting fields in a variable object
@@ -2194,6 +2295,14 @@ spec:
                                       UniqueItems specifies if items in an array must be unique.
                                       NOTE: Can only be set if type is array.
                                     type: boolean
+                                  x-kubernetes-list-map-keys:
+                                    type: string
+                                  x-kubernetes-list-type:
+                                    type: string
+                                  x-kubernetes-patch-merge-key:
+                                    type: string
+                                  x-kubernetes-patch-strategy:
+                                    type: string
                                   x-kubernetes-preserve-unknown-fields:
                                     description: |-
                                       XPreserveUnknownFields allows setting fields in a variable object
