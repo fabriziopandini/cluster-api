@@ -134,10 +134,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 
 func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.ClusterClass) error {
 
-	clusterClass.Spec.SMTest.After = []clusterv1.ClusterVariable{}
-	for _, variablePatch := range clusterClass.Spec.SMTest.Patch {
+	clusterClass.Spec.SMTest.Result = []clusterv1.ClusterVariable{}
+	for _, variablePatch := range clusterClass.Spec.SMTest.VariableOverrides {
 		var beforeValue *clusterv1.ClusterVariable
-		for _, b := range clusterClass.Spec.SMTest.Before {
+		for _, b := range clusterClass.Spec.SMTest.Variables {
 			if b.Name == variablePatch.Name {
 				beforeValue = &b
 				break
@@ -150,9 +150,9 @@ func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.Clus
 			}
 		}
 
-		beforeValueBytes, err := toWrappedBytes(beforeValue)
+		beforeWrappedValue, err := toWrappedVariable(beforeValue.Name, beforeValue.Value)
 		if err != nil {
-			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
 			continue
 		}
 
@@ -164,31 +164,89 @@ func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.Clus
 			}
 		}
 		if variableDefinition == nil {
-			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte("{ \"error\": \"cannot find schema for this variable\" }")}})
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte("{ \"error\": \"cannot find schema for this variable\" }")}})
 			continue
 		}
 
-		patchBytes, err := toWrappedBytes(&variablePatch)
+		wrappedPatch, err := toWrappedVariable(variablePatch.Name, *variablePatch.Patch)
 		if err != nil {
-			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
 			continue
 		}
 
 		patchMeta := clusterv1.NewPatchMetaForVariable(variablePatch.Name, &variableDefinition.Schema.OpenAPIV3Schema)
-		result, err := strategicmergepatch.StrategicMergePatchUsingLookupPatchMeta(beforeValueBytes, patchBytes, patchMeta)
+		result, err := strategicmergepatch.StrategicMergeMapPatchUsingLookupPatchMeta(beforeWrappedValue, wrappedPatch, patchMeta)
 		if err != nil {
-			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
 			continue
 		}
 
-		unwrappedResult, err := toUnwrappedBytes(&variablePatch, result)
+		unwrappedResult, err := toUnwrappedBytes(variablePatch.Name, result)
 		if err != nil {
-			clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
 			continue
 		}
 
-		clusterClass.Spec.SMTest.After = append(clusterClass.Spec.SMTest.After, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: unwrappedResult}})
+		clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: unwrappedResult}})
 	}
+
+	/*
+		clusterClass.Spec.SMTest.Result = []clusterv1.ClusterVariable{}
+		for _, variablePatch := range clusterClass.Spec.SMTest.VariableOverrides {
+			var beforeValue *clusterv1.ClusterVariable
+			for _, b := range clusterClass.Spec.SMTest.Variables {
+				if b.Name == variablePatch.Name {
+					beforeValue = &b
+					break
+				}
+			}
+			if beforeValue == nil {
+				beforeValue = &clusterv1.ClusterVariable{
+					Name:  variablePatch.Name,
+					Value: apiextensionsv1.JSON{Raw: []byte("{}")},
+				}
+			}
+
+			beforeValueBytes, err := toWrappedBytes(beforeValue.Name, beforeValue.Value)
+			if err != nil {
+				clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+				continue
+			}
+
+			var variableDefinition *clusterv1.ClusterClassVariable
+			for _, v := range clusterClass.Spec.Variables {
+				if v.Name == variablePatch.Name {
+					variableDefinition = &v
+					break
+				}
+			}
+			if variableDefinition == nil {
+				clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte("{ \"error\": \"cannot find schema for this variable\" }")}})
+				continue
+			}
+
+			patchBytes, err := toWrappedBytes(variablePatch.Name, variablePatch.Patch)
+			if err != nil {
+				clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+				continue
+			}
+
+			patchMeta := clusterv1.NewPatchMetaForVariable(variablePatch.Name, &variableDefinition.Schema.OpenAPIV3Schema)
+			result, err := strategicmergepatch.StrategicMergePatchUsingLookupPatchMeta(beforeValueBytes, patchBytes, patchMeta)
+			if err != nil {
+				clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+				continue
+			}
+
+			unwrappedResult, err := toUnwrappedBytes(variablePatch.Name, result)
+			if err != nil {
+				clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: []byte(fmt.Sprintf("{ \"error\": %q }", err.Error()))}})
+				continue
+			}
+
+			clusterClass.Spec.SMTest.Result = append(clusterClass.Spec.SMTest.Result, clusterv1.ClusterVariable{Name: variablePatch.Name, Value: apiextensionsv1.JSON{Raw: unwrappedResult}})
+		}
+	*/
 
 	if err := r.reconcileVariables(ctx, clusterClass); err != nil {
 		return err
@@ -203,33 +261,23 @@ func (r *Reconciler) reconcile(ctx context.Context, clusterClass *clusterv1.Clus
 	return nil
 }
 
-func toWrappedBytes(variable *clusterv1.ClusterVariable) ([]byte, error) {
+func toWrappedVariable(name string, JSON apiextensionsv1.JSON) (strategicmergepatch.JSONMap, error) {
 	var value interface{}
-	if err := json.Unmarshal(variable.Value.Raw, &value); err != nil {
+	if err := json.Unmarshal(JSON.Raw, &value); err != nil {
 		return nil, err
 	}
 
 	// Structural schema defaulting does not work with scalar values,
 	// so we wrap the schema and the variable in objects.
 	// <variable-name>: <variable-value>
-	wrappedValue := map[string]interface{}{
-		variable.Name: value,
+	wrappedValue := strategicmergepatch.JSONMap{
+		name: value,
 	}
-
-	b, err := json.Marshal(wrappedValue)
-	if err != nil {
-		return nil, err
-	}
-	return b, nil
+	return wrappedValue, nil
 }
 
-func toUnwrappedBytes(variable *clusterv1.ClusterVariable, result []byte) ([]byte, error) {
-	var wrappedValue map[string]interface{}
-	if err := json.Unmarshal(result, &wrappedValue); err != nil {
-		return nil, err
-	}
-
-	value := wrappedValue[variable.Name]
+func toUnwrappedBytes(name string, result strategicmergepatch.JSONMap) ([]byte, error) {
+	value := result[name]
 	// TODO handle if variable.Name does not exist
 
 	b, err := json.Marshal(value)
@@ -239,6 +287,45 @@ func toUnwrappedBytes(variable *clusterv1.ClusterVariable, result []byte) ([]byt
 
 	return b, nil
 }
+
+/*
+func toWrappedBytes(name string, JSON apiextensionsv1.JSON) ([]byte, error) {
+	var value interface{}
+	if err := json.Unmarshal(JSON.Raw, &value); err != nil {
+		return nil, err
+	}
+
+	// Structural schema defaulting does not work with scalar values,
+	// so we wrap the schema and the variable in objects.
+	// <variable-name>: <variable-value>
+	wrappedValue := map[string]interface{}{
+		name: value,
+	}
+
+	b, err := json.Marshal(wrappedValue)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func toUnwrappedBytes(name string, result []byte) ([]byte, error) {
+	var wrappedValue map[string]interface{}
+	if err := json.Unmarshal(result, &wrappedValue); err != nil {
+		return nil, err
+	}
+
+	value := wrappedValue[name]
+	// TODO handle if variable.Name does not exist
+
+	b, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
+*/
 
 func (r *Reconciler) reconcileExternalReferences(ctx context.Context, clusterClass *clusterv1.ClusterClass) (map[*corev1.ObjectReference]*corev1.ObjectReference, error) {
 	// Collect all the reference from the ClusterClass to templates.

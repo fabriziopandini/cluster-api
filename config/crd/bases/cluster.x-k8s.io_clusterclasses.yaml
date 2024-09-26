@@ -966,7 +966,7 @@ spec:
                 type: array
               smTest:
                 properties:
-                  after:
+                  result:
                     items:
                       description: |-
                         ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a
@@ -996,11 +996,8 @@ spec:
                       - value
                       type: object
                     type: array
-                  before:
+                  variableOverrides:
                     items:
-                      description: |-
-                        ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a
-                        Variable definition in the ClusterClass `status` variables.
                       properties:
                         definitionFrom:
                           description: |-
@@ -1011,6 +1008,8 @@ spec:
                         name:
                           description: Name of the variable.
                           type: string
+                        patch:
+                          x-kubernetes-preserve-unknown-fields: true
                         value:
                           description: |-
                             Value of the variable.
@@ -1023,10 +1022,9 @@ spec:
                           x-kubernetes-preserve-unknown-fields: true
                       required:
                       - name
-                      - value
                       type: object
                     type: array
-                  patch:
+                  variables:
                     items:
                       description: |-
                         ClusterVariable can be used to customize the Cluster through patches. Each ClusterVariable is associated with a

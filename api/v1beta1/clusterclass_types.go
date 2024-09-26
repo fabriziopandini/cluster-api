@@ -80,10 +80,35 @@ type ClusterClassSpec struct {
 	Patches []ClusterClassPatch `json:"patches,omitempty"`
 }
 
+type ClusterVariableOverride struct {
+	// Name of the variable.
+	Name string `json:"name"`
+
+	// DefinitionFrom specifies where the definition of this Variable is from.
+	//
+	// Deprecated: This field is deprecated, must not be set anymore and is going to be removed in the next apiVersion.
+	//
+	// +optional
+	DefinitionFrom string `json:"definitionFrom,omitempty"`
+
+	// Value of the variable.
+	// Note: the value will be validated against the schema of the corresponding ClusterClassVariable
+	// from the ClusterClass.
+	// Note: We have to use apiextensionsv1.JSON instead of a custom JSON type, because controller-tools has a
+	// hard-coded schema for apiextensionsv1.JSON which cannot be produced by another type via controller-tools,
+	// i.e. it is not possible to have no type field.
+	// Ref: https://github.com/kubernetes-sigs/controller-tools/blob/d0e03a142d0ecdd5491593e941ee1d6b5d91dba6/pkg/crd/known_types.go#L106-L111
+	// +optional
+	Value *apiextensionsv1.JSON `json:"value,omitempty"`
+
+	// +optional
+	Patch *apiextensionsv1.JSON `json:"patch,omitempty"`
+}
+
 type ClusterClassExperiment struct {
-	Before []ClusterVariable `json:"before,omitempty"`
-	Patch  []ClusterVariable `json:"patch,omitempty"`
-	After  []ClusterVariable `json:"after,omitempty"`
+	Variables         []ClusterVariable         `json:"variables,omitempty"`
+	VariableOverrides []ClusterVariableOverride `json:"variableOverrides,omitempty"`
+	Result            []ClusterVariable         `json:"result,omitempty"`
 }
 
 // ControlPlaneClass defines the class for the control plane.
