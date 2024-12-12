@@ -22,6 +22,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -47,6 +48,7 @@ import (
 	"sigs.k8s.io/cluster-api/feature"
 	runtimeclient "sigs.k8s.io/cluster-api/internal/runtime/client"
 	"sigs.k8s.io/cluster-api/internal/topology/variables"
+	"sigs.k8s.io/cluster-api/internal/util/cache"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conversion"
 	"sigs.k8s.io/cluster-api/util/patch"
@@ -67,6 +69,11 @@ type Reconciler struct {
 
 	// RuntimeClient is a client for calling runtime extensions.
 	RuntimeClient runtimeclient.Client
+
+	// reconcileCache is used to store when reconcile should not be executed before a
+	// specific time for a specific Request. This is used to implement rate-limiting to avoid
+	// e.g. being to aggressive on runtime extensions when provisioning new CC.
+	reconcileCache cache.Cache[cache.ReconcileEntry]
 }
 
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
@@ -91,10 +98,14 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	if err != nil {
 		return errors.Wrap(err, "failed setting up with a controller manager")
 	}
+
+	r.reconcileCache = cache.New[cache.ReconcileEntry]()
 	return nil
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (retres ctrl.Result, reterr error) {
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("Reconciling ClusterClass")
 	clusterClass := &clusterv1.ClusterClass{}
 	if err := r.Client.Get(ctx, req.NamespacedName, clusterClass); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -111,6 +122,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (retres ct
 	if !clusterClass.ObjectMeta.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
+
+	// Check reconcileDeleteCache to ensure we won't run reconcileDelete too frequently.
+	// Note: The reconcileDelete func will add entries to the cache.
+	if cacheEntry, ok := r.reconcileCache.Has(cache.NewReconcileEntryKey(clusterClass)); ok {
+		if requeueAfter, requeue := cacheEntry.ShouldRequeue(time.Now()); requeue {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		}
+	}
+
+	// Add entry to the reconcileDeleteCache so we won't run reconcileDelete more than once per second.
+	// Under certain circumstances the ReconcileAfter time will be set to a later time, e.g. when we're waiting
+	// for Pods to terminate or volumes to detach.
+	// This is done to ensure we're not spamming the workload cluster API server.
+	r.reconcileCache.Add(cache.NewReconcileEntry(clusterClass, time.Now().Add(1*time.Second)))
 
 	s := &scope{
 		clusterClass: clusterClass,
@@ -283,6 +308,7 @@ func (r *Reconciler) reconcileExternalReferences(ctx context.Context, s *scope) 
 }
 
 func (r *Reconciler) reconcileVariables(ctx context.Context, s *scope) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
 	clusterClass := s.clusterClass
 
 	errs := []error{}
@@ -299,6 +325,7 @@ func (r *Reconciler) reconcileVariables(ctx context.Context, s *scope) (ctrl.Res
 			if patch.External == nil || patch.External.DiscoverVariablesExtension == nil {
 				continue
 			}
+			log.Info("DiscoverVariables", "Patch", patch.Name)
 			req := &runtimehooksv1.DiscoverVariablesRequest{}
 			req.Settings = patch.External.Settings
 

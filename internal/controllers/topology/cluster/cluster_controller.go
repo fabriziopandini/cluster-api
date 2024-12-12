@@ -51,6 +51,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/controllers/topology/cluster/structuredmerge"
 	"sigs.k8s.io/cluster-api/internal/hooks"
 	runtimeclient "sigs.k8s.io/cluster-api/internal/runtime/client"
+	"sigs.k8s.io/cluster-api/internal/util/cache"
 	"sigs.k8s.io/cluster-api/internal/util/ssa"
 	"sigs.k8s.io/cluster-api/internal/webhooks"
 	"sigs.k8s.io/cluster-api/util"
@@ -89,6 +90,11 @@ type Reconciler struct {
 	desiredStateGenerator desiredstate.Generator
 
 	patchHelperFactory structuredmerge.PatchHelperFactoryFunc
+
+	// reconcileCache is used to store when reconcile should not be executed before a
+	// specific time for a specific Request. This is used to implement rate-limiting to avoid
+	// e.g. being to aggressive on runtime extensions when provisioning a cluster.
+	reconcileCache cache.Cache[cache.ReconcileEntry]
 
 	predicateLog logr.Logger
 }
@@ -147,6 +153,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	if r.patchHelperFactory == nil {
 		r.patchHelperFactory = serverSideApplyPatchHelperFactory(r.Client, ssa.NewCache())
 	}
+	r.reconcileCache = cache.New[cache.ReconcileEntry]()
 	return nil
 }
 
@@ -161,6 +168,7 @@ func (r *Reconciler) SetupForDryRun(recorder record.EventRecorder) {
 		PredicateLogger: ptr.To(logr.New(log.NullLogSink{})),
 	}
 	r.patchHelperFactory = dryRunPatchHelperFactory(r.Client)
+	r.reconcileCache = cache.New[cache.ReconcileEntry]()
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
@@ -185,6 +193,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	if cluster.Spec.Topology == nil {
 		return ctrl.Result{}, nil
 	}
+
+	// Check reconcileDeleteCache to ensure we won't run reconcileDelete too frequently.
+	// Note: The reconcileDelete func will add entries to the cache.
+	if cacheEntry, ok := r.reconcileCache.Has(cache.NewReconcileEntryKey(cluster)); ok {
+		if requeueAfter, requeue := cacheEntry.ShouldRequeue(time.Now()); requeue {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		}
+	}
+
+	// Add entry to the reconcileDeleteCache so we won't run reconcileDelete more than once per second.
+	// Under certain circumstances the ReconcileAfter time will be set to a later time, e.g. when we're waiting
+	// for Pods to terminate or volumes to detach.
+	// This is done to ensure we're not spamming the workload cluster API server.
+	r.reconcileCache.Add(cache.NewReconcileEntry(cluster, time.Now().Add(1*time.Second)))
 
 	patchHelper, err := patch.NewHelper(cluster, r.Client)
 	if err != nil {

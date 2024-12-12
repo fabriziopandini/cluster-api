@@ -322,7 +322,7 @@ func (c *client) CallExtension(ctx context.Context, hook runtimecatalog.Hook, fo
 		return errors.Errorf("failed to call extension handler %q: namespaceSelector did not match object %s", name, util.ObjectKey(forObject))
 	}
 
-	log.V(4).Info(fmt.Sprintf("Calling extension handler %q", name))
+	log.Info(fmt.Sprintf("Calling extension handler %q", name))
 	timeoutDuration := runtimehooksv1.DefaultHandlersTimeoutSeconds * time.Second
 	if registration.TimeoutSeconds != nil {
 		timeoutDuration = time.Duration(*registration.TimeoutSeconds) * time.Second
