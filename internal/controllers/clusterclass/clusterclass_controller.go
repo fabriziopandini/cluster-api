@@ -33,6 +33,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	kcache "k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,6 +75,10 @@ type Reconciler struct {
 	// specific time for a specific Request. This is used to implement rate-limiting to avoid
 	// e.g. being to aggressive on runtime extensions when provisioning new CC.
 	reconcileCache cache.Cache[cache.ReconcileEntry]
+
+	// callCache is a used to temporarily store the response to a DiscoveryVariable call for
+	// a specific runtime extension/settings.
+	callCache *callCache
 }
 
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, options controller.Options) error {
@@ -100,6 +105,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	}
 
 	r.reconcileCache = cache.New[cache.ReconcileEntry]()
+	r.callCache = newCallCache()
 	return nil
 }
 
@@ -326,18 +332,31 @@ func (r *Reconciler) reconcileVariables(ctx context.Context, s *scope) (ctrl.Res
 				continue
 			}
 			log.Info("DiscoverVariables", "Patch", patch.Name)
+
 			req := &runtimehooksv1.DiscoverVariablesRequest{}
 			req.Settings = patch.External.Settings
-
 			resp := &runtimehooksv1.DiscoverVariablesResponse{}
-			err := r.RuntimeClient.CallExtension(ctx, runtimehooksv1.DiscoverVariables, clusterClass, *patch.External.DiscoverVariablesExtension, req, resp)
-			if err != nil {
-				errs = append(errs, errors.Wrapf(err, "failed to call DiscoverVariables for patch %s", patch.Name))
-				continue
+
+			// Considering DiscoverVariables is expected to return a "static" response + usually there are few extensions in a cluster,
+			// we temporarily cache the response to improve performances in case there are many CC using the same RT/the same settings.
+			// This also mitigates spikes when CC re-sync happens or when changes to the ExtensionConfig are applied.
+			e := callCacheEntry{
+				Extension: *patch.External.DiscoverVariablesExtension,
+				Settings:  patch.External.Settings,
 			}
-			if resp.Status != runtimehooksv1.ResponseStatusSuccess {
-				errs = append(errs, errors.Errorf("patch %s returned status %q with message %q", patch.Name, resp.Status, resp.Message))
-				continue
+			var ok bool
+			if resp, ok = r.callCache.GetByKey(e.Key()); !ok {
+				err := r.RuntimeClient.CallExtension(ctx, runtimehooksv1.DiscoverVariables, clusterClass, *patch.External.DiscoverVariablesExtension, req, resp)
+				if err != nil {
+					errs = append(errs, errors.Wrapf(err, "failed to call DiscoverVariables for patch %s", patch.Name))
+					continue
+				}
+				if resp.Status != runtimehooksv1.ResponseStatusSuccess {
+					errs = append(errs, errors.Errorf("patch %s returned status %q with message %q", patch.Name, resp.Status, resp.Message))
+					continue
+				}
+				e.Response = resp
+				r.callCache.Add(e)
 			}
 			if resp.Variables != nil {
 				validationErrors := variables.ValidateClusterClassVariables(ctx, nil, resp.Variables, field.NewPath(patch.Name, "variables")).ToAggregate()
@@ -518,4 +537,70 @@ func matchNamespace(ctx context.Context, c client.Client, selector labels.Select
 		return false
 	}
 	return selector.Matches(labels.Set(ns.GetLabels()))
+}
+
+const (
+	// ttl is the duration for which we keep entries in the cache.
+	ttl = 10 * time.Minute
+
+	// expirationInterval is the interval in which we will remove expired entries
+	// from the cache.
+	expirationInterval = 10 * time.Hour
+)
+
+func newCallCache() *callCache {
+	r := &callCache{
+		Store: kcache.NewTTLStore(func(obj interface{}) (string, error) {
+			// We only add objects of type callCacheEntry to the cache, so it's safe to cast to E.
+			return obj.(callCacheEntry).Key(), nil
+		}, ttl),
+	}
+	go func() {
+		for {
+			// Call list to clear the cache of expired items.
+			// We have to do this periodically as the cache itself only expires
+			// items lazily. If we don't do this the cache grows indefinitely.
+			r.List()
+
+			time.Sleep(expirationInterval)
+		}
+	}()
+	return r
+}
+
+type callCache struct {
+	kcache.Store
+}
+
+// Add adds the given entry to the Cache.
+// Note: entries expire after the ttl.
+func (r *callCache) Add(e callCacheEntry) {
+	// Note: We can ignore the error here because the key func we pass into NewTTLStore never
+	// returns errors.
+	_ = r.Store.Add(e)
+}
+
+// Has checks if the given key (still) exists in the Cache.
+// Note: entries expire after the ttl.
+func (r *callCache) GetByKey(key string) (*runtimehooksv1.DiscoverVariablesResponse, bool) {
+	// Note: We can ignore the error here because GetByKey never returns an error.
+	item, exists, _ := r.Store.GetByKey(key)
+	if exists {
+		return item.(callCacheEntry).Response, true
+	}
+	return &runtimehooksv1.DiscoverVariablesResponse{}, false
+}
+
+type callCacheEntry struct {
+	Extension string
+	Settings  map[string]string
+	Response  *runtimehooksv1.DiscoverVariablesResponse
+}
+
+func (e callCacheEntry) Key() string {
+	s := e.Extension
+	for k, v := range e.Settings {
+		s += fmt.Sprintf(",%s=%s", k, v)
+	}
+	return s
 }
