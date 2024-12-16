@@ -36,10 +36,13 @@ import (
 	kcache "k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -96,6 +99,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		Watches(
 			&runtimev1.ExtensionConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.extensionConfigToClusterClass),
+			builder.WithPredicates(DropResync()),
 		).
 		WithEventFilter(predicates.ResourceHasFilterLabel(mgr.GetScheme(), predicateLog, r.WatchFilterValue)).
 		Complete(r)
@@ -107,6 +111,31 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	r.reconcileCache = cache.New[cache.ReconcileEntry]()
 	r.callCache = newCallCache()
 	return nil
+}
+
+func DropResync() predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldObj, ok := e.ObjectOld.(*runtimev1.ExtensionConfig)
+			if !ok {
+				return false
+			}
+			newObj := e.ObjectNew.(*runtimev1.ExtensionConfig)
+			if !ok {
+				return false
+			}
+			if oldObj.ResourceVersion == newObj.ResourceVersion {
+				return false
+			}
+
+			return true
+		},
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool {
+			return false
+		},
+	}
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (retres ctrl.Result, reterr error) {

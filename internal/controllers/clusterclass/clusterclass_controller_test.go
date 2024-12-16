@@ -44,6 +44,7 @@ import (
 	runtimehooksv1 "sigs.k8s.io/cluster-api/exp/runtime/hooks/api/v1alpha1"
 	"sigs.k8s.io/cluster-api/feature"
 	fakeruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client/fake"
+	"sigs.k8s.io/cluster-api/internal/util/cache"
 	"sigs.k8s.io/cluster-api/util/test/builder"
 )
 
@@ -1154,7 +1155,9 @@ func TestReconciler_reconcileVariables(t *testing.T) {
 				Build()
 
 			r := &Reconciler{
-				RuntimeClient: fakeRuntimeClient,
+				RuntimeClient:  fakeRuntimeClient,
+				reconcileCache: cache.New[cache.ReconcileEntry](),
+				callCache:      newCallCache(),
 			}
 
 			// Pin the compatibility version used in variable CEL validation to 1.29, so we don't have to continuously refactor
