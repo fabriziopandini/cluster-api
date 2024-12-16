@@ -135,7 +135,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (retres ct
 	// Under certain circumstances the ReconcileAfter time will be set to a later time, e.g. when we're waiting
 	// for Pods to terminate or volumes to detach.
 	// This is done to ensure we're not spamming the workload cluster API server.
-	r.reconcileCache.Add(cache.NewReconcileEntry(clusterClass, time.Now().Add(1*time.Second)))
+	// r.reconcileCache.Add(cache.NewReconcileEntry(clusterClass, time.Now().Add(1*time.Second)))
 
 	s := &scope{
 		clusterClass: clusterClass,

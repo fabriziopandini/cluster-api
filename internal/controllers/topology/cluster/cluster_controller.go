@@ -19,22 +19,28 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -157,6 +163,92 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 	return nil
 }
 
+func ClusterChangeIsRelevant(scheme *runtime.Scheme, logger logr.Logger) predicate.Funcs {
+	dropNotRelevant := func(cluster *clusterv1.Cluster) *clusterv1.Cluster {
+		c := cluster.DeepCopy()
+		c.Status.Phase = ""
+		c.Status.V1Beta2 = nil
+		return c
+	}
+
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			log := logger.WithValues("predicate", "ClusterUpdateUnpaused", "eventType", "update")
+			if gvk, err := apiutil.GVKForObject(e.ObjectOld, scheme); err == nil {
+				log = log.WithValues(gvk.Kind, klog.KObj(e.ObjectOld))
+			}
+
+			oldObj, ok := e.ObjectOld.(*clusterv1.Cluster)
+			if !ok {
+				log.V(4).Info("Expected Cluster", "type", fmt.Sprintf("%T", e.ObjectOld))
+				return false
+			}
+			oldObj = dropNotRelevant(oldObj)
+
+			newObj := e.ObjectNew.(*clusterv1.Cluster)
+			if !ok {
+				log.V(4).Info("Expected Cluster", "type", fmt.Sprintf("%T", e.ObjectNew))
+				return false
+			}
+			newObj = dropNotRelevant(newObj)
+
+			if reflect.DeepEqual(oldObj, newObj) {
+				return true
+			}
+
+			// TODO: FP
+			log.V(6).Info("Think about logging")
+			return false
+		},
+		CreateFunc:  func(event.CreateEvent) bool { return true },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+func MachineDeploymentChangeIsRelevant(scheme *runtime.Scheme, logger logr.Logger) predicate.Funcs {
+	dropNotRelevant := func(cluster *clusterv1.MachineDeployment) *clusterv1.MachineDeployment {
+		md := cluster.DeepCopy()
+		md.Status.Phase = ""
+		md.Status.V1Beta2 = nil
+		return md
+	}
+
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			log := logger.WithValues("predicate", "ClusterUpdateUnpaused", "eventType", "update")
+			if gvk, err := apiutil.GVKForObject(e.ObjectOld, scheme); err == nil {
+				log = log.WithValues(gvk.Kind, klog.KObj(e.ObjectOld))
+			}
+
+			oldObj, ok := e.ObjectOld.(*clusterv1.MachineDeployment)
+			if !ok {
+				log.V(4).Info("Expected Cluster", "type", fmt.Sprintf("%T", e.ObjectOld))
+				return false
+			}
+			oldObj = dropNotRelevant(oldObj)
+
+			newObj := e.ObjectNew.(*clusterv1.MachineDeployment)
+			if !ok {
+				log.V(4).Info("Expected Cluster", "type", fmt.Sprintf("%T", e.ObjectNew))
+				return false
+			}
+			newObj = dropNotRelevant(newObj)
+
+			if reflect.DeepEqual(oldObj, newObj) {
+				return true
+			}
+
+			// TODO: FP
+			log.V(6).Info("Think about logging")
+			return false
+		},
+		CreateFunc:  func(event.CreateEvent) bool { return true },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
 // SetupForDryRun prepares the Reconciler for a dry run execution.
 func (r *Reconciler) SetupForDryRun(recorder record.EventRecorder) {
 	r.desiredStateGenerator = desiredstate.NewGenerator(r.Client, r.ClusterCache, r.RuntimeClient)
@@ -206,7 +298,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	// Under certain circumstances the ReconcileAfter time will be set to a later time, e.g. when we're waiting
 	// for Pods to terminate or volumes to detach.
 	// This is done to ensure we're not spamming the workload cluster API server.
-	r.reconcileCache.Add(cache.NewReconcileEntry(cluster, time.Now().Add(1*time.Second)))
+	// r.reconcileCache.Add(cache.NewReconcileEntry(cluster, time.Now().Add(1*time.Second)))
 
 	patchHelper, err := patch.NewHelper(cluster, r.Client)
 	if err != nil {
