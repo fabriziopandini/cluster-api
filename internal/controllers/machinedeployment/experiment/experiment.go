@@ -43,7 +43,7 @@ func getAllMachineSetsAndSyncRevision(_ context.Context, md *clusterv1.MachineDe
 	for _, ms := range msList {
 		if ms.Spec.ClusterName == md.Spec.ClusterName { // Note: using ClusterName to track MD revision and detect MD changes
 			newMs = ms
-			break
+			continue
 		}
 		oldMs = append(oldMs, ms)
 	}
