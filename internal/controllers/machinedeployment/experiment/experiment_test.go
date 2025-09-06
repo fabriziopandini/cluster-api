@@ -3,9 +3,11 @@ package experiment
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -42,10 +44,16 @@ func Test_rolloutSequences(t *testing.T) {
 		// TODO: support use cases where MachineSet or Machine reconcile is delayed
 		// TODO: TBD support use cases where remediation kicks in
 		// TODO: in-place...
-		// TODO: save golden files + compare with golden files
 	}{
 		{
 			name:                "test1",
+			maxSurge:            1,
+			maxUnavailable:      0,
+			currentMachineNames: []string{"m1", "m2", "m3"},
+			desiredMachineNames: []string{"m4", "m5", "m6"},
+		},
+		{
+			name:                "test2",
 			maxSurge:            0,
 			maxUnavailable:      1,
 			currentMachineNames: []string{"m1", "m2", "m3"},
@@ -53,15 +61,19 @@ func Test_rolloutSequences(t *testing.T) {
 		},
 	}
 
+	// Get logger
+	log := newLogger(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
+			log.NewTestCase(tt.name)
 
 			// Init current and desired state from test case
 			current, desired := Init(tt.maxSurge, tt.maxUnavailable, tt.currentMachineNames, tt.desiredMachineNames)
 
 			// Log initial state
-			t.Logf("[Test] initial state\n%s", current)
+			log.Logf("[Test] initial state\n%s", current)
 			i := 1
 			maxIterations := 20
 			for {
@@ -73,7 +85,7 @@ func Test_rolloutSequences(t *testing.T) {
 				current.machineDeployment.Status.AvailableReplicas = mdutil.GetAvailableReplicaCountForMachineSets(machineSets)
 
 				// Log state after this reconcile
-				t.Logf("[MD controller] iteration %d\n%s", i, current)
+				log.Logf("[MD controller] md rollout iteration %d\n%s", i, current)
 
 				// Check we are not breaching rollout constraints
 				minAvailable := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) - mdutil.MaxUnavailable(*current.machineDeployment)
@@ -87,11 +99,11 @@ func Test_rolloutSequences(t *testing.T) {
 				g.Expect(totActualReplicas).To(BeNumerically("<=", maxReplicas), "totActualReplicas machines is greater than MaxSurge")
 
 				// Run mutators faking other controllers
-				msControllerMutator(t, current)
+				msControllerMutator(log, current)
 
 				// Check if we are at the desired state
 				if current.Equal(desired) {
-					t.Logf("[Test] final state\n%s", desired)
+					log.Logf("[Test] final state\n%s", desired)
 					break
 				}
 
@@ -100,10 +112,13 @@ func Test_rolloutSequences(t *testing.T) {
 				if i > maxIterations {
 					current.Equal(desired)
 					// Log desired state we never reached
-					t.Logf("[Test] desired state\n%s", desired)
+					log.Logf("[Test] desired state\n%s", desired)
 					g.Fail(fmt.Sprintf("Failed to reach desired state in less than %d iterations", maxIterations))
 				}
 			}
+
+			currentLog, goldenLog := log.EndTestCase()
+			g.Expect(currentLog).To(Equal(goldenLog), "current test case log and golden test case log are different\n%s", cmp.Diff(currentLog, goldenLog))
 		})
 	}
 }
@@ -116,8 +131,9 @@ type rolloutScope struct {
 	machineUID int32
 }
 
+// Init creates current state and desired state for rolling out a md from currentMachines to wantMachineNames.
 func Init(maxSurge int32, maxUnavailable int32, currentMachineNames []string, wantMachineNames []string) (current, desired *rolloutScope) {
-	// Create current state, with a MD with
+	// create current state, with a MD with
 	// - given MaxSurge, MaxUnavailable
 	// - replica counters assuming all the machines are at stable state
 	// - spec different from the MachineSets and Machines we are going to create down below (to simulate a change that triggers a rollout, but it is not yet started)
@@ -249,13 +265,13 @@ func (r *rolloutScope) GetNextMachineUID() int32 {
 
 func (r rolloutScope) String() string {
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("%s, %d/%d replicas \n", r.machineDeployment.Name, ptr.Deref(r.machineDeployment.Status.Replicas, 0), ptr.Deref(r.machineDeployment.Spec.Replicas, 0)))
+	sb.WriteString(fmt.Sprintf("%s, %d/%d replicas\n", r.machineDeployment.Name, ptr.Deref(r.machineDeployment.Status.Replicas, 0), ptr.Deref(r.machineDeployment.Spec.Replicas, 0)))
 	for _, ms := range r.machineSets {
 		machineNames := []string{}
 		for _, m := range r.machineSetMachines[ms.Name] {
 			machineNames = append(machineNames, m.Name)
 		}
-		sb.WriteString(fmt.Sprintf("- %s, %d/%d replicas (%s) \n", ms.Name, ptr.Deref(ms.Status.Replicas, 0), ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machineNames, ",")))
+		sb.WriteString(fmt.Sprintf("- %s, %d/%d replicas (%s)\n", ms.Name, ptr.Deref(ms.Status.Replicas, 0), ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machineNames, ",")))
 	}
 	return sb.String()
 }
@@ -303,7 +319,7 @@ func machineSetMachinesAreEqual(a, b map[string][]*clusterv1.Machine) bool {
 }
 
 // msControllerMutator fakes a small part fo the MS controller, just what is require for the rollout to progress.
-func msControllerMutator(t *testing.T, scope *rolloutScope) {
+func msControllerMutator(log *logger, scope *rolloutScope) {
 	for _, ms := range scope.machineSets {
 		// if too few machines, create missing machine.
 		// new machines are created with a predictable name, so it is easier to write test case and validate rollout sequences.
@@ -318,7 +334,7 @@ func msControllerMutator(t *testing.T, scope *rolloutScope) {
 				)
 				machinesAdded = append(machinesAdded, machineName)
 			}
-			t.Logf("[MS controller] %s scale up to %d/%[2]d replicas (%s created)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesAdded, ","))
+			log.Logf("[MS controller] %s scale up to %d/%[2]d replicas (%s created)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesAdded, ","))
 		}
 		// if too many replicas, delete exceeding machines.
 		// exceeding machines are deleted in predictable order, so it is easier to write test case and validate rollout sequences.
@@ -330,11 +346,63 @@ func msControllerMutator(t *testing.T, scope *rolloutScope) {
 				machinesDeleted = append(machinesDeleted, scope.machineSetMachines[ms.Name][i].Name)
 			}
 			scope.machineSetMachines[ms.Name] = scope.machineSetMachines[ms.Name][machinesToDelete:]
-			t.Logf("[MS controller] %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
+			log.Logf("[MS controller] %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
 		}
 
 		// Update counters
 		ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
 		ms.Status.AvailableReplicas = ms.Status.Replicas
 	}
+}
+
+type logger struct {
+	t *testing.T
+
+	testCase              string
+	testCaseStringBuilder strings.Builder
+}
+
+func newLogger(t *testing.T) *logger {
+	return &logger{t: t, testCaseStringBuilder: strings.Builder{}}
+}
+
+func (l *logger) NewTestCase(name string) {
+	if l.testCase != "" {
+		l.testCaseStringBuilder.Reset()
+		l.testCaseStringBuilder.WriteString("\n")
+	}
+	l.testCaseStringBuilder.WriteString(fmt.Sprintf("## %s\n\n", name))
+	l.testCase = name
+}
+
+func (l *logger) Logf(format string, args ...interface{}) {
+	l.t.Logf(format, args...)
+
+	s := strings.TrimSuffix(fmt.Sprintf(format, args...), "\n")
+	sb := &strings.Builder{}
+	if strings.Contains(s, "\n") {
+		lines := strings.Split(s, "\n")
+		for _, line := range lines {
+			indent := "  "
+			if strings.HasPrefix(line, "[") {
+				indent = ""
+			}
+			sb.WriteString(indent + line + "\n")
+		}
+	} else {
+		sb.WriteString(s + "\n")
+	}
+	l.testCaseStringBuilder.WriteString(sb.String())
+}
+
+func (l *logger) EndTestCase() (string, string) {
+	os.WriteFile(fmt.Sprintf("%s.test.log", l.testCase), []byte(l.testCaseStringBuilder.String()), 0666)
+
+	currentBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log", l.testCase))
+	current := string(currentBytes)
+
+	goldenBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log.golden", l.testCase))
+	golden := string(goldenBytes)
+
+	return current, golden
 }
