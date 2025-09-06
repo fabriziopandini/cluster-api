@@ -19,6 +19,16 @@ import (
 
 var ctx = context.Background()
 
+// stateMutators are func that can change state in the middle of a rollout sequence.
+// Note: those func are run before every iteration; when state are mutated, the func must return true.
+type stateMutator func(log *logger, i int, scope *rolloutScope) bool
+
+// minAvailableBreachSilencer are func that can be used to temporarily silence MinAvailable breaches in the middle of a rollout sequence.
+type minAvailableBreachSilencer func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool
+
+// maxSurgeBreachSilencer are func that can be used to temporarily silence maxSurge breaches in the middle of a rollout sequence.
+type maxSurgeBreachSilencer func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool
+
 type rolloutSequenceTestCase struct {
 	name           string
 	maxSurge       int32
@@ -35,6 +45,16 @@ type rolloutSequenceTestCase struct {
 	// Add another MS to the state before the rollout. This MS must be used during the rollout and become owner of all the desired machines.
 	addAdditionalOldMachineSetWithNewSpec bool
 
+	// currentStateMutators allows to simulate users actions in the middle of a rollout
+	// Note: those func are run before every iteration.
+	currentStateMutators []stateMutator
+
+	// minAvailableBreachSilencers can be used to temporarily silence MinAvailable breaches
+	minAvailableBreachSilencers []minAvailableBreachSilencer
+
+	// maxSurgeBreachSilencers can be used to temporarily silence MaxSurge breaches
+	maxSurgeBreachSilencers []minAvailableBreachSilencer
+
 	// desiredMachineNames is the list of machines at the end of the rollout.
 	// all the machines in this list are expected to be upToDate and owned by the new MD after the rollout (which is different from the new MD before the rollout).
 	// if this list contains old machines names (machine names already in currentMachineNames), it implies those machine have been upgraded in places.
@@ -44,8 +64,6 @@ type rolloutSequenceTestCase struct {
 	// e.g. desiredMachineNames "m1","m2","m3" (desired machine names after rollout performed using in-place upgrade for an MD with currentMachineNames "m1","m2","m3")
 	desiredMachineNames []string
 
-	// TODO: support use cases where desired replica count changes in flight
-	// TODO: support use cases where desired state changes in flight
 	// TODO: support use cases where MachineSet or Machine reconcile is delayed
 	// TODO: TBD support use cases where remediation kicks in
 	// TODO: in-place...
@@ -59,6 +77,25 @@ func Test_rolloutSequences(t *testing.T) {
 			maxUnavailable:      0,
 			currentMachineNames: []string{"m1", "m2", "m3"},
 			desiredMachineNames: []string{"m4", "m5", "m6"},
+			currentStateMutators: []stateMutator{
+				func(log *logger, i int, scope *rolloutScope) bool {
+					if i == 5 {
+						t.Log("[User] scale up MD to 4 replicas")
+						scope.machineDeployment.Spec.Replicas = ptr.To(int32(4))
+						return true
+					}
+					return false
+				},
+			},
+			minAvailableBreachSilencers: []minAvailableBreachSilencer{
+				func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+					if i == 5 {
+						t.Log("[Toleration] tolerate minAvailable breach after scale up")
+						return true
+					}
+					return false
+				},
+			},
 		},
 		{
 			name:                "test2",
@@ -85,6 +122,18 @@ func Test_rolloutSequences(t *testing.T) {
 			i := 1
 			maxIterations := 20
 			for {
+				// Run scope mutators faking users actions in the middle of a rollout
+				if len(tt.currentStateMutators) > 0 {
+					stateChanged := false
+					for _, mutator := range tt.currentStateMutators {
+						stateChanged = stateChanged || mutator(log, i, current)
+					}
+					if !stateChanged {
+						// update desire state according to the mutated current scope
+						desired = computeDesired(current, tt.desiredMachineNames)
+					}
+				}
+
 				// Running a small subset of MD reconcile (the rollout logic and a bit of setReplicas)
 				machineSets, err := rolloutRolling(ctx, current.machineDeployment, current.machineSets)
 				g.Expect(err).ToNot(HaveOccurred())
@@ -96,15 +145,37 @@ func Test_rolloutSequences(t *testing.T) {
 				log.Logf("[MD controller] md rollout iteration %d\n%s", i, current)
 
 				// Check we are not breaching rollout constraints
-				minAvailable := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) - mdutil.MaxUnavailable(*current.machineDeployment)
-				totAvailable := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(current.machineSets), 0)
-				g.Expect(totAvailable).To(BeNumerically(">=", minAvailable), "totAvailable machines is less than MaxUnavailable")
+				minAvailableReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) - mdutil.MaxUnavailable(*current.machineDeployment)
+				totAvailableReplicas := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(current.machineSets), 0)
+				if totAvailableReplicas < minAvailableReplicas {
+					tolerateBreach := false
+					for _, tolerationFunc := range tt.minAvailableBreachSilencers {
+						if tolerationFunc(log, i, current, minAvailableReplicas, totAvailableReplicas) {
+							tolerateBreach = true
+							break
+						}
+					}
+					if !tolerateBreach {
+						g.Expect(totAvailableReplicas).To(BeNumerically(">=", minAvailableReplicas), "totAvailable machines is less than MaxUnavailable")
+					}
+				}
 
-				maxReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) + mdutil.MaxSurge(*current.machineDeployment)
+				maxAllowedReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) + mdutil.MaxSurge(*current.machineDeployment)
 				totReplicas := mdutil.GetReplicaCountForMachineSets(current.machineSets)
-				g.Expect(totReplicas).To(BeNumerically("<=", maxReplicas), "totReplicas machines is greater than MaxSurge")
 				totActualReplicas := ptr.Deref(mdutil.GetActualReplicaCountForMachineSets(current.machineSets), 0)
-				g.Expect(totActualReplicas).To(BeNumerically("<=", maxReplicas), "totActualReplicas machines is greater than MaxSurge")
+				if max(totReplicas, totActualReplicas) > maxAllowedReplicas {
+					tolerateBreach := false
+					for _, tolerationFunc := range tt.maxSurgeBreachSilencers {
+						if tolerationFunc(log, i, current, maxAllowedReplicas, max(totReplicas, totActualReplicas)) {
+							tolerateBreach = true
+							break
+						}
+					}
+					if !tolerateBreach {
+						g.Expect(totReplicas).To(BeNumerically("<=", maxAllowedReplicas), "totReplicas machines is greater than MaxSurge")
+						g.Expect(totActualReplicas).To(BeNumerically("<=", maxAllowedReplicas), "totActualReplicas machines is greater than MaxSurge")
+					}
+				}
 
 				// Run mutators faking other controllers
 				msControllerMutator(log, current)
@@ -197,10 +268,9 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 	// if required, add an old MS to current state, with
 	// - replica counters 0 assuming all the machines are at stable state
 	// - the same spec the MD got after triggering rollout -- this MS must be used during the rollout
-	var candidateNewMS *clusterv1.MachineSet
 	if tt.addAdditionalOldMachineSetWithNewSpec {
 		totMachineSets++
-		candidateNewMS = &clusterv1.MachineSet{
+		ms := &clusterv1.MachineSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("ms%d", totMachineSets),
 			},
@@ -214,7 +284,7 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 				AvailableReplicas: ptr.To(int32(0)),
 			},
 		}
-		current.machineSets = append(current.machineSets, candidateNewMS)
+		current.machineSets = append(current.machineSets, ms)
 	}
 
 	// Create current MS, with
@@ -256,6 +326,18 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 	current.machineDeployment.Spec.Replicas = ptr.To(totMachines)
 	current.machineUID = totMachines
 
+	return current, computeDesired(current, tt.desiredMachineNames)
+}
+
+func computeDesired(current *rolloutScope, desiredMachineNames []string) (desired *rolloutScope) {
+	var totMachineSets, totMachines int32
+	totMachineSets = int32(len(current.machineSets))
+	for _, msMachines := range current.machineSetMachines {
+		for range msMachines {
+			totMachines++
+		}
+	}
+
 	// Create current state, with a MD equal to the one we started from because:
 	// - spec was already changed in current to simulate a change that triggers a rollout
 	// - desired replica counters are the same than current replica counters (we star with all the machines at stable state v1, we should end with all the machines at stable state v2)
@@ -264,28 +346,27 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 	}
 
 	// Add current MS to desired state, but set replica counters to zero because all the machines must be moved to the new MS.
+	// Note: one of the old MD could also be the NewMS, the MS that must become owner of all the desired machines.
+	var newMS *clusterv1.MachineSet
 	for _, currentMS := range current.machineSets {
 		oldMS := currentMS.DeepCopy()
 		oldMS.Spec.Replicas = ptr.To(int32(0))
 		oldMS.Status.Replicas = ptr.To(int32(0))
 		oldMS.Status.AvailableReplicas = ptr.To(int32(0))
 		desired.machineSets = append(desired.machineSets, oldMS)
+
+		if oldMS.Spec.ClusterName == desired.machineDeployment.Spec.ClusterName {
+			newMS = oldMS
+		}
 	}
 
-	// Add a new MS to desired state, with
+	// Add or update the new MS to desired state, with
 	// - the new spec from the MD
 	// - replica counters assuming all the replicas must be here at the end of the rollout.
-	var newMS *clusterv1.MachineSet
-
-	if candidateNewMS != nil {
-		for _, desiredMS := range desired.machineSets {
-			if desiredMS.Name == candidateNewMS.Name {
-				newMS = desiredMS
-				newMS.Spec.Replicas = desired.machineDeployment.Spec.Replicas
-				newMS.Status.Replicas = desired.machineDeployment.Status.Replicas
-				newMS.Status.AvailableReplicas = desired.machineDeployment.Status.AvailableReplicas
-			}
-		}
+	if newMS != nil {
+		newMS.Spec.Replicas = desired.machineDeployment.Spec.Replicas
+		newMS.Status.Replicas = desired.machineDeployment.Status.Replicas
+		newMS.Status.AvailableReplicas = desired.machineDeployment.Status.AvailableReplicas
 	} else {
 		totMachineSets++
 		newMS = &clusterv1.MachineSet{
@@ -308,7 +389,7 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 	// Add a want machines to desired state, with
 	// - the new spec from the MD (steady state)
 	desiredMachines := []*clusterv1.Machine{}
-	for _, machineSetMachineName := range tt.desiredMachineNames {
+	for _, machineSetMachineName := range desiredMachineNames {
 		totMachines++
 		desiredMachines = append(desiredMachines, &clusterv1.Machine{
 			ObjectMeta: metav1.ObjectMeta{Name: machineSetMachineName},
@@ -320,8 +401,7 @@ func Init(tt rolloutSequenceTestCase) (current, desired *rolloutScope) {
 	}
 	desired.machineSetMachines = map[string][]*clusterv1.Machine{}
 	desired.machineSetMachines[newMS.Name] = desiredMachines
-
-	return current, desired
+	return desired
 }
 
 // GetNextMachineUID provides a predictable UID for machines.
