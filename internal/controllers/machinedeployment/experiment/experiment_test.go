@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -28,6 +30,9 @@ type minAvailableBreachSilencer func(log *logger, i int, scope *rolloutScope, mi
 
 // maxSurgeBreachSilencer are func that can be used to temporarily silence maxSurge breaches in the middle of a rollout sequence.
 type maxSurgeBreachSilencer func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool
+
+// directivesGenerator are func that return directives to be used by the fake MachineSet controller or by the fake Machine controller.
+type directivesGenerator func(log *logger, i int, scope *rolloutScope) []string
 
 type rolloutSequenceTestCase struct {
 	name           string
@@ -47,13 +52,48 @@ type rolloutSequenceTestCase struct {
 
 	// currentStateMutators allows to simulate users actions in the middle of a rollout
 	// Note: those func are run before every iteration.
+	//
+	// currentStateMutators: []stateMutator{
+	// 	func(log *logger, i int, scope *rolloutScope) bool {
+	// 		if i == 5 {
+	// 			t.Log("[User] scale up MD to 4 replicas")
+	// 			scope.machineDeployment.Spec.Replicas = ptr.To(int32(4))
+	// 			return true
+	// 		}
+	// 		return false
+	// 	},
+	// },
 	currentStateMutators []stateMutator
 
 	// minAvailableBreachSilencers can be used to temporarily silence MinAvailable breaches
+	//
+	// minAvailableBreachSilencers: []minAvailableBreachSilencer{
+	// 	func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+	// 		if i == 5 {
+	// 			t.Log("[Toleration] tolerate minAvailable breach after scale up")
+	// 			return true
+	// 		}
+	// 		return false
+	// 	},
+	// },
 	minAvailableBreachSilencers []minAvailableBreachSilencer
 
 	// maxSurgeBreachSilencers can be used to temporarily silence MaxSurge breaches
-	maxSurgeBreachSilencers []minAvailableBreachSilencer
+	// (see minAvailableBreachSilencers example)
+	maxSurgeBreachSilencers []maxSurgeBreachSilencer
+
+	// machineSetControllerDirectiveGenerators can be used to provide directives to be used by the fake MachineSet controller.
+	//
+	// machineSetControllerDirectiveGenerators: []directivesGenerator{
+	// 	func(log *logger, i int, scope *rolloutScope) []string {
+	// 		if i == 1 {
+	// 			t.Log("[Directive] ms2 skip reconcile")
+	// 			return []string{"ms2-SKIP-RECONCILE"}
+	// 		}
+	// 		return nil
+	// 	},
+	// },
+	machineSetControllerDirectiveGenerators []directivesGenerator
 
 	// desiredMachineNames is the list of machines at the end of the rollout.
 	// all the machines in this list are expected to be upToDate and owned by the new MD after the rollout (which is different from the new MD before the rollout).
@@ -64,8 +104,6 @@ type rolloutSequenceTestCase struct {
 	// e.g. desiredMachineNames "m1","m2","m3" (desired machine names after rollout performed using in-place upgrade for an MD with currentMachineNames "m1","m2","m3")
 	desiredMachineNames []string
 
-	// TODO: support use cases where MachineSet or Machine reconcile is delayed
-	// TODO: TBD support use cases where remediation kicks in
 	// TODO: in-place...
 }
 
@@ -77,25 +115,6 @@ func Test_rolloutSequences(t *testing.T) {
 			maxUnavailable:      0,
 			currentMachineNames: []string{"m1", "m2", "m3"},
 			desiredMachineNames: []string{"m4", "m5", "m6"},
-			currentStateMutators: []stateMutator{
-				func(log *logger, i int, scope *rolloutScope) bool {
-					if i == 5 {
-						t.Log("[User] scale up MD to 4 replicas")
-						scope.machineDeployment.Spec.Replicas = ptr.To(int32(4))
-						return true
-					}
-					return false
-				},
-			},
-			minAvailableBreachSilencers: []minAvailableBreachSilencer{
-				func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
-					if i == 5 {
-						t.Log("[Toleration] tolerate minAvailable breach after scale up")
-						return true
-					}
-					return false
-				},
-			},
 		},
 		{
 			name:                "test2",
@@ -178,7 +197,11 @@ func Test_rolloutSequences(t *testing.T) {
 				}
 
 				// Run mutators faking other controllers
-				msControllerMutator(log, current)
+				directives := []string{}
+				for _, generator := range tt.machineSetControllerDirectiveGenerators {
+					directives = append(directives, generator(log, i, current)...)
+				}
+				msControllerMutator(log, current, directives)
 
 				// Check if we are at the desired state
 				if current.Equal(desired) {
@@ -196,8 +219,8 @@ func Test_rolloutSequences(t *testing.T) {
 				}
 			}
 
-			// currentLog, goldenLog := log.EndTestCase()
-			// g.Expect(currentLog).To(Equal(goldenLog), "current test case log and golden test case log are different\n%s", cmp.Diff(currentLog, goldenLog))
+			currentLog, goldenLog := log.EndTestCase()
+			g.Expect(currentLog).To(Equal(goldenLog), "current test case log and golden test case log are different\n%s", cmp.Diff(currentLog, goldenLog))
 		})
 	}
 }
@@ -468,8 +491,14 @@ func machineSetMachinesAreEqual(a, b map[string][]*clusterv1.Machine) bool {
 }
 
 // msControllerMutator fakes a small part fo the MS controller, just what is require for the rollout to progress.
-func msControllerMutator(log *logger, scope *rolloutScope) {
+func msControllerMutator(log *logger, scope *rolloutScope, directives []string) {
+	d := sets.NewString(directives...)
+
 	for _, ms := range scope.machineSets {
+		if d.Has(fmt.Sprintf("%s-SKIP-RECONCILE", ms.Name)) {
+			return
+		}
+
 		// if too few machines, create missing machine.
 		// new machines are created with a predictable name, so it is easier to write test case and validate rollout sequences.
 		// e.g. if the cluster is initialize with m1, m2, m3, new machines will be m4, m5, m6
