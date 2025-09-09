@@ -4,19 +4,27 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/pointer"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/controllers/machinedeployment/mdutil"
 )
 
-func rolloutRolling(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) ([]*clusterv1.MachineSet, error) {
-	newMS, oldMSs, err := getAllMachineSetsAndSyncRevision(ctx, md, msList)
+type rolloutPlanner struct {
+	getCanUpdateDecision func(oldMS *clusterv1.MachineSet) bool
+	scaleIntents         map[string]int32
+}
+
+func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) ([]*clusterv1.MachineSet, error) {
+	newMS, oldMSs, err := p.getAllMachineSetsAndSyncRevision(ctx, md, msList)
 	if err != nil {
 		return nil, err
 	}
@@ -25,30 +33,52 @@ func rolloutRolling(ctx context.Context, md *clusterv1.MachineDeployment, msList
 
 	// FIXME: I'm not recomputing MD status because it looks like nothing in this func depends from this; double check this
 
-	if err := reconcileNewMachineSet(ctx, allMSs, newMS, md); err != nil {
+	p.scaleIntents = make(map[string]int32)
+
+	if err := p.reconcileNewMachineSet(ctx, allMSs, newMS, md); err != nil {
 		return nil, err
 	}
 
-	if err := reconcileOldMachineSets(ctx, allMSs, oldMSs, newMS, md); err != nil {
+	if err := p.reconcileOldMachineSets(ctx, allMSs, oldMSs, newMS, md); err != nil {
 		return nil, err
 	}
+
+	if err := p.reconcileInPlaceUpdateIntent(ctx, allMSs, oldMSs, newMS, md); err != nil {
+		return nil, err
+	}
+
+	// FIXME: change this to do a patch
+
+	// Apply changes.
+	if scaleIntent, ok := p.scaleIntents[newMS.Name]; ok {
+		newMS.Spec.Replicas = ptr.To(int32(scaleIntent))
+	}
+	for _, oldMS := range oldMSs {
+		if scaleIntent, ok := p.scaleIntents[oldMS.Name]; ok {
+			oldMS.Spec.Replicas = ptr.To(int32(scaleIntent))
+		}
+	}
+
+	// FIXME: make sure in place annotation are not propagated
 
 	return allMSs, nil
 }
 
-func getAllMachineSetsAndSyncRevision(_ context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) (*clusterv1.MachineSet, []*clusterv1.MachineSet, error) {
+func (p *rolloutPlanner) getAllMachineSetsAndSyncRevision(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) (*clusterv1.MachineSet, []*clusterv1.MachineSet, error) {
+	log := ctrl.LoggerFrom(ctx)
+
 	// FIXME: this code is super fake
-	var newMs *clusterv1.MachineSet
-	oldMs := make([]*clusterv1.MachineSet, 0, len(msList))
+	var newMS *clusterv1.MachineSet
+	oldMSs := make([]*clusterv1.MachineSet, 0, len(msList))
 	for _, ms := range msList {
 		if ms.Spec.ClusterName == md.Spec.ClusterName { // Note: using ClusterName to track MD revision and detect MD changes
-			newMs = ms
+			newMS = ms
 			continue
 		}
-		oldMs = append(oldMs, ms)
+		oldMSs = append(oldMSs, ms)
 	}
-	if newMs == nil {
-		newMs = &clusterv1.MachineSet{
+	if newMS == nil {
+		newMS = &clusterv1.MachineSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("ms%d", len(msList)+1), // Note: this assumes that we are not deleting MS (re-using names would be confusing)
 			},
@@ -56,16 +86,18 @@ func getAllMachineSetsAndSyncRevision(_ context.Context, md *clusterv1.MachineDe
 				// Note: using ClusterName to track MD revision and detect MD changes
 				ClusterName: md.Spec.ClusterName,
 				// Note: without this the newMS.Spec.Replicas == nil will fail
-				//  Also may be this is correct, why to create a new MS if we are not moving machine to it?
-				Replicas: pointer.Int32Ptr(1),
+				Replicas: pointer.Int32Ptr(0),
 			},
 		}
+
+		log.V(5).Info(fmt.Sprintf("Creating %s", newMS.Name))
 	}
-	return newMs, oldMs, nil
+	return newMS, oldMSs, nil
 }
 
-func reconcileNewMachineSet(ctx context.Context, allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
+func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context, allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
 	// FIXME: cleanupDisableMachineCreateAnnotation
+	log := ctrl.LoggerFrom(ctx)
 
 	if md.Spec.Replicas == nil {
 		return errors.Errorf("spec.replicas for MachineDeployment %v is nil, this is unexpected", client.ObjectKeyFromObject(md))
@@ -82,17 +114,28 @@ func reconcileNewMachineSet(ctx context.Context, allMSs []*clusterv1.MachineSet,
 
 	if *(newMS.Spec.Replicas) > *(md.Spec.Replicas) {
 		// Scale down.
-		return scaleMachineSet(ctx, newMS, *(md.Spec.Replicas))
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas", newMS.Name, *(md.Spec.Replicas)))
+		p.scaleIntents[newMS.Name] = *(md.Spec.Replicas)
+		return nil
 	}
 
 	newReplicasCount, err := mdutil.NewMSNewReplicas(md, allMSs, *newMS.Spec.Replicas)
 	if err != nil {
 		return err
 	}
-	return scaleMachineSet(ctx, newMS, newReplicasCount)
+
+	if newReplicasCount < *(newMS.Spec.Replicas) {
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas", newMS.Name, newReplicasCount))
+		p.scaleIntents[newMS.Name] = newReplicasCount
+	}
+	if newReplicasCount > *(newMS.Spec.Replicas) {
+		log.V(5).Info(fmt.Sprintf("Setting scale up intent for %s to %d replicas", newMS.Name, newReplicasCount))
+		p.scaleIntents[newMS.Name] = newReplicasCount
+	}
+	return nil
 }
 
-func reconcileOldMachineSets(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
+func (p *rolloutPlanner) reconcileOldMachineSets(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
 	// FIXME: Log?
 
 	if md.Spec.Replicas == nil {
@@ -161,7 +204,7 @@ func reconcileOldMachineSets(ctx context.Context, allMSs []*clusterv1.MachineSet
 	// Scale down old MachineSets, need check maxUnavailable to ensure we can scale down
 	allMSs = oldMSs
 	allMSs = append(allMSs, newMS)
-	_, err := scaleDownOldMachineSetsForRollingUpdate(ctx, allMSs, oldMSs, md)
+	_, err := p.scaleDownOldMachineSetsForRollingUpdate(ctx, allMSs, oldMSs, md)
 	if err != nil {
 		return err
 	}
@@ -169,8 +212,8 @@ func reconcileOldMachineSets(ctx context.Context, allMSs []*clusterv1.MachineSet
 	return nil
 }
 
-func scaleDownOldMachineSetsForRollingUpdate(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, md *clusterv1.MachineDeployment) (int32, error) {
-	// FIXME: Log?
+func (p *rolloutPlanner) scaleDownOldMachineSetsForRollingUpdate(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, md *clusterv1.MachineDeployment) (int32, error) {
+	log := ctrl.LoggerFrom(ctx)
 
 	if md.Spec.Replicas == nil {
 		return 0, errors.Errorf("spec.replicas for MachineDeployment %v is nil, this is unexpected", client.ObjectKeyFromObject(md))
@@ -215,18 +258,218 @@ func scaleDownOldMachineSetsForRollingUpdate(ctx context.Context, allMSs []*clus
 				client.ObjectKeyFromObject(targetMS), *(targetMS.Spec.Replicas), newReplicasCount)
 		}
 
-		if err := scaleMachineSet(ctx, targetMS, newReplicasCount); err != nil {
-			return totalScaledDown, err
-		}
-
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas", targetMS.Name, newReplicasCount))
+		p.scaleIntents[targetMS.Name] = newReplicasCount
 		totalScaledDown += scaleDownCount
 	}
 
 	return totalScaledDown, nil
 }
 
-func scaleMachineSet(_ context.Context, ms *clusterv1.MachineSet, replicas int32) error {
-	// FIXME: most probably we need something different to track "scale intent" and apply it later
-	ms.Spec.Replicas = &replicas
+func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	// When calling this func, new and old MS have their scale intent, which was computed under the assumption that
+	// rollout is going to happen by delete/re-create, and thus it will impact availability.
+
+	// This function checks if it is possible to rollout changes by performing in-place updates.
+	// A key assumption for the logic implemented in this function is the fact that
+	// in place updates impact availability (even if the in place update technically is not impacting workloads,
+	// the system must account for scenarios when the operation fails, leading to remediation of the machine/unavailability).
+	// As a consequence, unless the user accounts for this unavailability by setting MaxUnavailable > 1,
+	// rollout with in-place will create at least 1 additional machine to ensure MaxUnavailable == 0 is respected.
+	// NOTE: if maxSurge is > 1, machine deployment will create more additional machines.
+
+	// First, ensure thet all the outdated move annotations from previous reconcile are cleaned up:
+	// - oldMs are not waiting for replicas (only newMS could be waiting)
+	// - newMs are not moving replicas to another MS (only oldMS could be moving to the newMS)
+	// - oldMs are not moving replicas when there are no more replicas to move
+	// - newMs are not waiting for replicas when all the expected replicas already exist
+	// NOTE: those cleanup step are necessary to handle properly changes to the MD during a rollout (newMS changes).
+	// Also this ensures annotations are removed when an MS has completed a move operation for an in-place update,
+	// or otherwise it ensures those annotation are kept to preserve a move decision across multiple MD reconcile.
+	cleanupOutdatedInPlaceMoveAnnotations(oldMSs, newMS)
+
+	// Find all the oldMSs for which it make sense perform an in-place update:
+	// If old MS are scaling down, and new MS doesn't have yet all replicas, those old MS are candidates for in-place update.
+	inPlaceUpdateCandidates := sets.Set[string]{}
+	for _, oldMS := range oldMSs {
+		if scaleIntent, ok := p.scaleIntents[oldMS.Name]; ok && scaleIntent < ptr.Deref(oldMS.Spec.Replicas, 0) {
+			if ptr.Deref(newMS.Spec.Replicas, 0) < ptr.Deref(md.Spec.Replicas, 0) {
+				inPlaceUpdateCandidates.Insert(oldMS.Name)
+			}
+		}
+	}
+
+	// Check if candidate MS can update in place.
+	totInPlaceUpdated := int32(0)
+	for _, oldMS := range oldMSs {
+		if !inPlaceUpdateCandidates.Has(oldMS.Name) {
+			continue
+		}
+
+		// FIXME: Think about how to propagate all the info required for the canUpdate from getAllMachineSetsAndSyncRevision to here.
+		// TODO: Possible optimization, if a move to the same target is already in progress, do not ask again
+		canUpdateDecision := p.getCanUpdateDecision(oldMS)
+
+		log.V(5).Info(fmt.Sprintf("CanUpdate decision for %s: %t", oldMS.Name, canUpdateDecision))
+
+		// drop the candidate if it can't update in place
+		if !canUpdateDecision {
+			inPlaceUpdateCandidates.Delete(oldMS.Name)
+			continue
+		}
+
+		// keep track of how many machines are going to be updated in-place.
+		scaleIntent, ok := p.scaleIntents[oldMS.Name]
+		if !ok {
+			// Note: this condition can't happen because in-place candidates are oldMs with a scale down intent
+			continue
+		}
+
+		inPlaceUpdated := max(ptr.Deref(oldMS.Spec.Replicas, 0)-scaleIntent, 0)
+		if inPlaceUpdated > 0 {
+			// Important!
+			// If the old old MS is already sending machines to the newMS,
+			// we should not count them twice when computing the number that we are going to user
+			// for increasing the replica count on the newMS (re-entrancy).
+			if !hasScaleDownMovingTo(oldMS, newMS.Name) {
+				totInPlaceUpdated += inPlaceUpdated
+			}
+
+			// Set the annotation informing the old MS to move machine to the new MS instead of delete them.
+			setScaleDownMovingTo(oldMS, newMS.Name)
+		}
+	}
+
+	// Exist quickly if there no suitable candidates/machines to be updated in place.
+	if inPlaceUpdateCandidates.Len() == 0 || totInPlaceUpdated == 0 {
+		return nil
+	}
+
+	// At this point, we know there are oldMS that can be moved to the newMS and then upgraded in place,
+	// so we should increase the replica count of the newMS for the replicas that are being moved.
+	// Note: those machines already exists, so this operation is not breaching maxSurge constraint.
+	// TODO: figure it out how to give precedence to max surge
+	totScaleUp := int32(0)
+	if scaleIntent, ok := p.scaleIntents[newMS.Name]; ok {
+		scaleUp := max(ptr.Deref(newMS.Spec.Replicas, 0)-scaleIntent, 0)
+		totScaleUp += scaleUp
+	}
+	totScaleUp += totInPlaceUpdated
+
+	scaleIntentOverride := min(*newMS.Spec.Replicas+totScaleUp, *md.Spec.Replicas)
+	p.scaleIntents[newMS.Name] = scaleIntentOverride
+	setScaleUpWaitForReplicasFromMS(newMS, inPlaceUpdateCandidates.UnsortedList()...)
+
+	log.V(5).Info(fmt.Sprintf("Overriding scale up intent for %s to %d replicas to account for machines that can be moved to %s", newMS.Name, scaleIntentOverride, sortAndJoin(inPlaceUpdateCandidates.UnsortedList())))
 	return nil
+}
+
+// scaleDownMovingToAnnotationName is an annotation applied by the rollout planner to MachineSets.
+// This annotation instructs the MS controller to scale down by moving machines to the target MS instead of deleting machines.
+// Note: the annotation is not enough to make the actual move to happen, also the newMS
+// must have an annotation accepting machines from this MS.
+const scaleDownMovingToAnnotationName = "cluster.x-k8s.io/scale-down-moving-to"
+
+func setScaleDownMovingTo(ms *clusterv1.MachineSet, targetMS string) {
+	if ms.Annotations == nil {
+		ms.Annotations = map[string]string{}
+	}
+	ms.Annotations[scaleDownMovingToAnnotationName] = targetMS
+}
+
+func hasScaleDownMovingTo(ms *clusterv1.MachineSet, targetMS string) bool {
+	if val, ok := ms.Annotations[scaleDownMovingToAnnotationName]; ok && val == targetMS {
+		return true
+	}
+	return false
+}
+
+// scaleUpWaitForReplicasAnnotationName is an annotation applied by the rollout planner to MachineSets.
+// This annotation instructs the MS controller to not scale up by creating machines, but instead wait
+// for machines being moved by other MachineSets.
+const scaleUpWaitForReplicasAnnotationName = "cluster.x-k8s.io/scale-up-wait-for-replicas"
+
+// setScaleUpWaitForReplicasFromMS updates the scaleUpWaitForReplicasAnnotationName for a machine set
+// when one or more source MS are added.
+// Note: all the existing source MS will be preserved, thus tracking intent across reconcile acting on
+// different MachineSets.
+func setScaleUpWaitForReplicasFromMS(ms *clusterv1.MachineSet, fromMSs ...string) {
+	if ms.Annotations == nil {
+		ms.Annotations = map[string]string{}
+	}
+
+	sourcesSet := sets.Set[string]{}
+	currentList := ms.Annotations[scaleUpWaitForReplicasAnnotationName]
+	if currentList != "" {
+		sourcesSet.Insert(strings.Split(currentList, ",")...)
+	}
+	sourcesSet.Insert(fromMSs...)
+
+	sourcesList := sourcesSet.UnsortedList()
+	sort.Strings(sourcesList)
+	ms.Annotations[scaleUpWaitForReplicasAnnotationName] = strings.Join(sourcesList, ",")
+}
+
+// unsetScaleUpWaitForReplicasFromMS updates the scaleUpWaitForReplicasAnnotationName for a machine set
+// when one source MS is removed.
+// Note: all the existing source MS will be preserved, thus tracking intent across reconcile acting on
+// different MachineSets.
+func unsetScaleUpWaitForReplicasFromMS(ms *clusterv1.MachineSet, fromMS string) {
+	currentList, ok := ms.Annotations[scaleUpWaitForReplicasAnnotationName]
+	if !ok {
+		return
+	}
+
+	sourcesSet := sets.Set[string]{}
+	sourcesSet.Insert(strings.Split(currentList, ",")...)
+	if !sourcesSet.Has(fromMS) {
+		return
+	}
+
+	sourcesSet.Delete(fromMS)
+	if sourcesSet.Len() == 0 {
+		delete(ms.Annotations, scaleUpWaitForReplicasAnnotationName)
+		return
+	}
+
+	sourcesList := sourcesSet.UnsortedList()
+	ms.Annotations[scaleUpWaitForReplicasAnnotationName] = sortAndJoin(sourcesList)
+}
+
+// cleanupOutdatedInPlaceMoveAnnotations ensure thet all the outdated move annotations from previous reconcile are cleaned up:
+// NOTE: those cleanup step are necessary to handle properly changes to the MD during a rollout (newMS changes).
+// Also this ensures annotations are removed when an MS has completed a move operation for an in-place update,
+// or otherwise it ensures those annotation are kept to preserve intent/move decision across multiple MD reconcile.
+func cleanupOutdatedInPlaceMoveAnnotations(oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet) {
+	// - newMs are not moving replicas to another MS (only oldMS could be moving to the newMS)
+	delete(newMS.Annotations, scaleDownMovingToAnnotationName)
+
+	// - newMs are not waiting for replicas when all the expected replicas already exist
+	// FIXME: This cleanup should be done also outside of the rollout process.
+	//   when doing this, might be it can help generalize this cleanup (any ms should not be waiting for replicas when all the expected replicas already exist)
+	if _, ok := newMS.Annotations[scaleUpWaitForReplicasAnnotationName]; ok && ptr.Deref(newMS.Status.Replicas, 0) == ptr.Deref(newMS.Spec.Replicas, 0) {
+		delete(newMS.Annotations, scaleDownMovingToAnnotationName)
+	}
+
+	for _, oldMS := range oldMSs {
+		// - oldMs are not waiting for replicas (only newMS could be waiting)
+		delete(oldMS.Annotations, scaleUpWaitForReplicasAnnotationName)
+
+		// - oldMs are not moving replicas when there are no more replicas to move
+		// FIXME: This cleanup should be done also outside of the rollout process.
+		//   when doing this, might be it can help generalize this cleanup (any ms should not be moving replicas when there are no more replicas to move)
+		if ptr.Deref(oldMS.Status.Replicas, 0) == ptr.Deref(oldMS.Spec.Replicas, 0) {
+			delete(oldMS.Annotations, scaleDownMovingToAnnotationName)
+
+			// NOTE: also drop this MS from the list of MachineSets from which the new MS is waiting for replicas.
+			unsetScaleUpWaitForReplicasFromMS(newMS, oldMS.Name)
+		}
+	}
+}
+
+func sortAndJoin(a []string) string {
+	sort.Strings(a)
+	return strings.Join(a, ",")
 }

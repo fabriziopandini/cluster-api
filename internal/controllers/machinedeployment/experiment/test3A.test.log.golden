@@ -1,0 +1,33 @@
+## test3A
+
+[Test] Initial state
+  md, 3/3 replicas
+  - ms1, 3/3 replicas (m1,m2,m3)
+[MD controller] Result of rollout planner, iteration 1
+  md, 3/3 replicas
+  - ms1, 3/3 replicas (m1,m2,m3)
+  - ms2, 0/1 replicas ()
+[MS controller] ms2 scale up to 1/1 replicas (m4 created)
+[MD controller] Result of rollout planner, iteration 2
+  md, 4/3 replicas
+  - ms1, 3/2 replicas (m1,m2,m3)
+  - ms2, 1/2 replicas (m4)
+[MS controller] ms1 scale down to 2/2 replicas (m1 moved to ms2)
+[MD controller] Result of rollout planner, iteration 3
+  md, 4/3 replicas
+  - ms1, 2/1 replicas (m2,m3)
+  - ms2, 2/3 replicas (m4,m1)
+[MS controller] ms1 scale down to 1/1 replicas (m2 moved to ms2)
+[MD controller] Result of rollout planner, iteration 4
+  md, 4/3 replicas
+  - ms1, 1/0 replicas (m3)
+  - ms2, 3/3 replicas (m4,m1,m2)
+[MS controller] ms1 scale down to 0/0 replicas (m3 deleted)
+[MD controller] Result of rollout planner, iteration 5
+  md, 3/3 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 3/3 replicas (m4,m1,m2)
+[Test] Final state
+  md, 3/3 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 3/3 replicas (m4,m1,m2)
