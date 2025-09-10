@@ -47,7 +47,7 @@ type rolloutSequenceTestCase struct {
 	// e.g. "m1","m2","m3"
 	currentMachineNames []string
 
-	// Add another MS to the state before the rollout. This MS must not be used during the rollout.
+	// Add another MS to the state before the rollout. This MS must not be used during the rollout. // FIXME(feedback) what does "must not be used" mean, EDIT: okay got it 0 replicas, so this doesn't cover the case of multiple old MS with replicas
 	addAdditionalOldMachineSet bool
 
 	// Add another MS to the state before the rollout. This MS must be used during the rollout and become owner of all the desired machines.
@@ -199,7 +199,7 @@ func Test_rolloutSequences(t *testing.T) {
 					for _, mutator := range tt.currentStateMutators {
 						stateChanged = stateChanged || mutator(fileLogger, i, current)
 					}
-					if !stateChanged {
+					if !stateChanged { // FIXME(feedback) Why if !stateChanged?
 						// update desire state according to the mutated current scope
 						desired = computeDesiredRolloutScope(current, tt.desiredMachineNames)
 					}
@@ -218,7 +218,7 @@ func Test_rolloutSequences(t *testing.T) {
 				for _, taskID := range taskOrder {
 					if taskID == 0 {
 						if tt.randomControllerOrder {
-							t.Logf("[MD controller] Iternation %d, Reconcile md", i)
+							t.Logf("[MD controller] Iteration %d, Reconcile md", i)
 						}
 						// Running a small subset of MD reconcile (the rollout logic and a bit of setReplicas)
 						p := &rolloutPlanner{
@@ -255,6 +255,12 @@ func Test_rolloutSequences(t *testing.T) {
 						}
 
 						maxAllowedReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) + mdutil.MaxSurge(*current.machineDeployment)
+						// FIXME(feedback): I think the prod code is using TotalMachineSetsReplicaSum for this, I think taking max(totReplicas, totActualReplicas) is not the same
+						// Example:
+						// * MS1: spec 4, status 6
+						// * MS2: spec 5, status 1
+						// => max(totReplicas, totActualReplicas) => 9
+						// => TotalMachineSetsReplicaSum => 11
 						totReplicas := mdutil.GetReplicaCountForMachineSets(current.machineSets)
 						totActualReplicas := ptr.Deref(mdutil.GetActualReplicaCountForMachineSets(current.machineSets), 0)
 						if max(totReplicas, totActualReplicas) > maxAllowedReplicas {
@@ -481,7 +487,7 @@ func initCurrentRolloutScope(tt rolloutSequenceTestCase) (current *rolloutScope)
 	current.machineSetMachines = map[string][]*clusterv1.Machine{}
 	current.machineSetMachines[ms.Name] = currentMachines
 
-	current.machineDeployment.Spec.Replicas = ptr.To(totMachines)
+	current.machineDeployment.Spec.Replicas = ptr.To(totMachines) // FIXME(feedback) I assume/hope this is the same as mdReplicaCount
 	current.machineUID = totMachines
 
 	return current
@@ -491,14 +497,12 @@ func computeDesiredRolloutScope(current *rolloutScope, desiredMachineNames []str
 	var totMachineSets, totMachines int32
 	totMachineSets = int32(len(current.machineSets))
 	for _, msMachines := range current.machineSetMachines {
-		for range msMachines {
-			totMachines++
-		}
+		totMachines += int32(len(msMachines))
 	}
 
 	// Create current state, with a MD equal to the one we started from because:
 	// - spec was already changed in current to simulate a change that triggers a rollout
-	// - desired replica counters are the same than current replica counters (we star with all the machines at stable state v1, we should end with all the machines at stable state v2)
+	// - desired replica counters are the same than current replica counters (we start with all the machines at stable state v1, we should end with all the machines at stable state v2)
 	desired = &rolloutScope{
 		machineDeployment: current.machineDeployment.DeepCopy(),
 	}
@@ -568,7 +572,7 @@ func (r *rolloutScope) GetNextMachineUID() int32 {
 	return r.machineUID
 }
 
-func (r rolloutScope) String() string {
+func (r *rolloutScope) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("%s, %d/%d replicas\n", r.machineDeployment.Name, ptr.Deref(r.machineDeployment.Status.Replicas, 0), ptr.Deref(r.machineDeployment.Spec.Replicas, 0)))
 
@@ -692,6 +696,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				}
 				if targetMS == nil {
 					log.Logf("[MS controller] PANIC! %s is set to send replicas to %s, which does not exists", ms.Name, targetMSName)
+					// FIXME(feedback): Makes me wonder what happens here in reality, I think a quick MD revert can lead to this situation (as the MD controller acts independently of the MS controller). Best case we delete the Machine via the ownerRef, I guess
 					return
 				}
 
