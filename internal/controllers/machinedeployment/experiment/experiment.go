@@ -36,7 +36,9 @@ func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.Machi
 	p.scaleIntents = make(map[string]int32)
 
 	// FIXME(feedback): how are reconcileNewMachineSet & reconcileOldMachineSets counting Machines that are going through an in-place update
-	// e.g. if they are just counted as available we won't respect maxUnavailable correctly
+	// e.g. if they are just counted as available we won't respect maxUnavailable correctly: Answer
+	// => either in-place updating Machines will have Available false
+	// => or we're going to subtract in-place updating Machines from available when doing the calculations
 
 	if err := p.reconcileNewMachineSet(ctx, allMSs, newMS, md); err != nil {
 		return nil, err
@@ -295,7 +297,6 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 
 	// Find all the oldMSs for which it make sense perform an in-place update:
 	// If old MS are scaling down, and new MS doesn't have yet all replicas, those old MS are candidates for in-place update.
-	// FIXME(feedback) this only detects inPlaceUpdateCandidates based on old MS scale down, I assume this is correct as only if we have these scale downs we can do in-place, otherwise we'll just to scale up on the new MD
 	inPlaceUpdateCandidates := sets.Set[string]{}
 	for _, oldMS := range oldMSs {
 		if scaleIntent, ok := p.scaleIntents[oldMS.Name]; ok && scaleIntent < ptr.Deref(oldMS.Spec.Replicas, 0) {
@@ -342,7 +343,7 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 			}
 
 			// Set the annotation informing the old MS to move machine to the new MS instead of delete them.
-			setScaleDownMovingTo(oldMS, newMS.Name) // FIXME(feedback): will this tell the old MS to move all Machines? (i.e. looks like the old MS won't respect maxUnavailable). To double-check: in general maxSurge / maxUnavailable would be always respected if we stick to the Machine create/delete the original logic "allowed us" (while deletes signal that in-place update is okay)
+			setScaleDownMovingTo(oldMS, newMS.Name)
 		}
 	}
 
@@ -354,17 +355,17 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 	// At this point, we know there are oldMS that can be moved to the newMS and then upgraded in place,
 	// so we should increase the replica count of the newMS for the replicas that are being moved.
 	// Note: those machines already exist, so this operation is not breaching maxSurge constraint.
-	// TODO: figure it out how to give precedence to max surge
+	// TODO: figure it out how to give precedence to max surge, another way to look at this: how do we combine scale up/down signals correctly
 	totScaleUp := int32(0)
 	if scaleIntent, ok := p.scaleIntents[newMS.Name]; ok {
-		scaleUp := max(ptr.Deref(newMS.Spec.Replicas, 0)-scaleIntent, 0) // FIXME(feedback) is this the wrong way around? example newMS replicas: 5, scaleIntent 6 => scaleUp = -1 (aka 0)
+		scaleUp := max(scaleIntent-ptr.Deref(newMS.Spec.Replicas, 0), 0)
 		totScaleUp += scaleUp
 	}
-	totScaleUp += totInPlaceUpdated // FIXME(feedback) is it correct that we don't subtract totInPlaceUpdated from scaleUpIntent delta?
+	totScaleUp += totInPlaceUpdated
 
 	scaleIntentOverride := min(*newMS.Spec.Replicas+totScaleUp, *md.Spec.Replicas)
 	p.scaleIntents[newMS.Name] = scaleIntentOverride
-	setScaleUpWaitForReplicasFromMS(newMS, inPlaceUpdateCandidates.UnsortedList()...) // FIXME(feedback) How does the newMS know how many Machines to create? (Can new MS only wait or also create at the same time?)
+	setScaleUpWaitForReplicasFromMS(newMS, inPlaceUpdateCandidates.UnsortedList()...)
 
 	// FIXME(feedback) Let's talk about old/new MS controller race conditions
 	// * Wondering about scenarios where the move & wait annotations on MSs change over time and MS controllers might still act on the old annotations
@@ -458,12 +459,12 @@ func cleanupOutdatedInPlaceMoveAnnotations(oldMSs []*clusterv1.MachineSet, newMS
 	// FIXME: This cleanup should be done also outside of the rollout process.
 	//   when doing this, might be it can help generalize this cleanup (any ms should not be waiting for replicas when all the expected replicas already exist)
 	if _, ok := newMS.Annotations[scaleUpWaitForReplicasAnnotationName]; ok && ptr.Deref(newMS.Status.Replicas, 0) == ptr.Deref(newMS.Spec.Replicas, 0) {
-		delete(newMS.Annotations, scaleDownMovingToAnnotationName) // FIXME(feedback): should this delete scaleUpWaitForReplicasAnnotationName instead?
+		delete(newMS.Annotations, scaleUpWaitForReplicasAnnotationName)
 	}
 
 	for _, oldMS := range oldMSs {
 		// - oldMs are not waiting for replicas (only newMS could be waiting)
-		delete(oldMS.Annotations, scaleUpWaitForReplicasAnnotationName) // FIXME(feedback): what if an in-place update is still going on and the user reverts the MD? don't wait have to wait for the move to complete?
+		delete(oldMS.Annotations, scaleUpWaitForReplicasAnnotationName)
 
 		// - oldMs are not moving replicas when there are no more replicas to move
 		// FIXME: This cleanup should be done also outside of the rollout process.
@@ -472,9 +473,11 @@ func cleanupOutdatedInPlaceMoveAnnotations(oldMSs []*clusterv1.MachineSet, newMS
 			delete(oldMS.Annotations, scaleDownMovingToAnnotationName)
 
 			// NOTE: also drop this MS from the list of MachineSets from which the new MS is waiting for replicas.
-			unsetScaleUpWaitForReplicasFromMS(newMS, oldMS.Name) // FIXME(feedback) what if the old MS is being deleted, will the old MS be removed from the new MS annotation then?
+			unsetScaleUpWaitForReplicasFromMS(newMS, oldMS.Name)
 		}
 	}
+
+	// TODO: consider adding additional safeguard to drop non-existing MS from scaleUpWaitForReplicasAnnotationName, maybe also something for deleting MS
 }
 
 func sortAndJoin(a []string) string {

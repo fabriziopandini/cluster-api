@@ -47,7 +47,7 @@ type rolloutSequenceTestCase struct {
 	// e.g. "m1","m2","m3"
 	currentMachineNames []string
 
-	// Add another MS to the state before the rollout. This MS must not be used during the rollout. // FIXME(feedback) what does "must not be used" mean, EDIT: okay got it 0 replicas, so this doesn't cover the case of multiple old MS with replicas
+	// Add another MS to the state before the rollout. This MS must stay at 0 replicas.
 	addAdditionalOldMachineSet bool
 
 	// Add another MS to the state before the rollout. This MS must be used during the rollout and become owner of all the desired machines.
@@ -199,7 +199,7 @@ func Test_rolloutSequences(t *testing.T) {
 					for _, mutator := range tt.currentStateMutators {
 						stateChanged = stateChanged || mutator(fileLogger, i, current)
 					}
-					if !stateChanged { // FIXME(feedback) Why if !stateChanged?
+					if stateChanged {
 						// update desire state according to the mutated current scope
 						desired = computeDesiredRolloutScope(current, tt.desiredMachineNames)
 					}
@@ -255,25 +255,18 @@ func Test_rolloutSequences(t *testing.T) {
 						}
 
 						maxAllowedReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) + mdutil.MaxSurge(*current.machineDeployment)
-						// FIXME(feedback): I think the prod code is using TotalMachineSetsReplicaSum for this, I think taking max(totReplicas, totActualReplicas) is not the same
-						// Example:
-						// * MS1: spec 4, status 6
-						// * MS2: spec 5, status 1
-						// => max(totReplicas, totActualReplicas) => 9
-						// => TotalMachineSetsReplicaSum => 11
-						totReplicas := mdutil.GetReplicaCountForMachineSets(current.machineSets)
-						totActualReplicas := ptr.Deref(mdutil.GetActualReplicaCountForMachineSets(current.machineSets), 0)
-						if max(totReplicas, totActualReplicas) > maxAllowedReplicas {
+						// TODO: double check this change
+						totReplicas := mdutil.TotalMachineSetsReplicaSum(current.machineSets)
+						if totReplicas > maxAllowedReplicas {
 							tolerateBreach := false
 							for _, tolerationFunc := range tt.maxSurgeBreachSilencers {
-								if tolerationFunc(fileLogger, i, current, maxAllowedReplicas, max(totReplicas, totActualReplicas)) {
+								if tolerationFunc(fileLogger, i, current, maxAllowedReplicas, totReplicas) {
 									tolerateBreach = true
 									break
 								}
 							}
 							if !tolerateBreach {
 								g.Expect(totReplicas).To(BeNumerically("<=", maxAllowedReplicas), "totReplicas machines is greater than MaxSurge")
-								g.Expect(totActualReplicas).To(BeNumerically("<=", maxAllowedReplicas), "totActualReplicas machines is greater than MaxSurge")
 							}
 						}
 					}
@@ -572,7 +565,7 @@ func (r *rolloutScope) GetNextMachineUID() int32 {
 	return r.machineUID
 }
 
-func (r *rolloutScope) String() string {
+func (r rolloutScope) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("%s, %d/%d replicas\n", r.machineDeployment.Name, ptr.Deref(r.machineDeployment.Status.Replicas, 0), ptr.Deref(r.machineDeployment.Spec.Replicas, 0)))
 
@@ -696,7 +689,6 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				}
 				if targetMS == nil {
 					log.Logf("[MS controller] PANIC! %s is set to send replicas to %s, which does not exists", ms.Name, targetMSName)
-					// FIXME(feedback): Makes me wonder what happens here in reality, I think a quick MD revert can lead to this situation (as the MD controller acts independently of the MS controller). Best case we delete the Machine via the ownerRef, I guess
 					return
 				}
 
