@@ -113,6 +113,8 @@ type rolloutSequenceTestCase struct {
 	// skipLogToFileAndGoldenFileCheck allows to skip storing the log to file and golden file Check.
 	skipLogToFileAndGoldenFileCheck bool
 
+	goldenFileName string
+
 	// randomControllerOrder force the tests to run controllers in random order, mimicking what happens in production.
 	// NOTE. We are using a pseudo randomizer, so the random order remains consistent across runs of the same groups of tests.
 	randomControllerOrder bool
@@ -130,39 +132,73 @@ func Test_rolloutSequences(t *testing.T) {
 		return true
 	}
 	tests := []rolloutSequenceTestCase{
+		// Regular rollout without in-place extensions
+
 		{
-			name:                            "test1", // Scale out, regular rollout
-			maxSurge:                        1,
-			maxUnavailable:                  0,
-			currentMachineNames:             []string{"m1", "m2", "m3"},
-			desiredMachineNames:             []string{"m4", "m5", "m6"},
-			randomControllerOrder:           true,
-			skipLogToFileAndGoldenFileCheck: true,
+			name:                "Regular rollout, maxSurge 1, MaxUnavailable 0",
+			goldenFileName:      "test1",
+			maxSurge:            1,
+			maxUnavailable:      0,
+			currentMachineNames: []string{"m1", "m2", "m3"},
+			desiredMachineNames: []string{"m4", "m5", "m6"},
 		},
 		{
-			name:                "test2", // Scale in, regular rollout
+			name:                  "Regular rollout, maxSurge 1, MaxUnavailable 0, randomControllerOrder",
+			goldenFileName:        "test1r",
+			maxSurge:              1,
+			maxUnavailable:        0,
+			currentMachineNames:   []string{"m1", "m2", "m3"},
+			desiredMachineNames:   []string{"m4", "m5", "m6"},
+			randomControllerOrder: true,
+		},
+		{
+			name:                "Regular rollout, maxSurge 0, MaxUnavailable 1",
+			goldenFileName:      "test2",
 			maxSurge:            0,
 			maxUnavailable:      1,
 			currentMachineNames: []string{"m1", "m2", "m3"},
 			desiredMachineNames: []string{"m4", "m5", "m6"},
 		},
 		{
-			name:                 "test3A", // Scale out, in-place
+			name:                  "Regular rollout, maxSurge 0, MaxUnavailable 1, randomControllerOrder",
+			goldenFileName:        "test2r",
+			maxSurge:              0,
+			maxUnavailable:        1,
+			currentMachineNames:   []string{"m1", "m2", "m3"},
+			desiredMachineNames:   []string{"m4", "m5", "m6"},
+			randomControllerOrder: true,
+		},
+
+		// Rollout with In-place extensions
+
+		{
+			name:                 "In-place rollout, maxSurge 1, MaxUnavailable 0",
+			goldenFileName:       "test3",
 			maxSurge:             1,
 			maxUnavailable:       0,
 			currentMachineNames:  []string{"m1", "m2", "m3"},
-			desiredMachineNames:  []string{"m4", "m1", "m2"},
+			desiredMachineNames:  []string{"m4", "m1", "m2"}, // When rollout starts, scale up to create room for in-place (otherwise minAvailable do not allow it)
 			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
 		},
 		{
-			name:                            "test3B", // Scale out, in-place with no unavailability (should not scale out), but the receiving MS do not recognizes new machines immediately --> Availability flips
-			maxSurge:                        0,
-			maxUnavailable:                  1,
-			currentMachineNames:             []string{"m1", "m2", "m3"},
-			desiredMachineNames:             []string{"m1", "m2", "m3"},
-			getCanUpdateDecision:            oldMSCanAlwaysInPlaceUpdate,
-			randomControllerOrder:           true,
-			skipLogToFileAndGoldenFileCheck: true,
+			name:                 "In-place rollout, maxSurge 0, MaxUnavailable 1",
+			goldenFileName:       "test4",
+			maxSurge:             0,
+			maxUnavailable:       1,
+			currentMachineNames:  []string{"m1", "m2", "m3"},
+			desiredMachineNames:  []string{"m1", "m2", "m3"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+
+		// Experiment
+
+		{
+			name:                "Regular rollout, maxSurge 1, MaxUnavailable 0",
+			goldenFileName:      "testX",
+			maxSurge:            1,
+			maxUnavailable:      1,
+			currentMachineNames: []string{"m1", "m2", "m3"},
+			desiredMachineNames: []string{"m4", "m5", "m6"},
 		},
 	}
 
@@ -182,7 +218,8 @@ func Test_rolloutSequences(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
-			fileLogger.NewTestCase(tt.name)
+			fileLogger.NewTestCase(tt.name, tt.goldenFileName)
+			rng := rand.New(rand.NewSource(0))
 
 			// Init current and desired state from test case
 			current := initCurrentRolloutScope(tt)
@@ -190,6 +227,7 @@ func Test_rolloutSequences(t *testing.T) {
 
 			// Log initial state
 			fileLogger.Logf("[Test] Initial state\n%s", current)
+			fileLogger.Logf("[Test] Rollout %d replicas, MaxSurge=%d, MaxUnavailable=%d\n", len(tt.currentMachineNames), tt.maxSurge, tt.maxUnavailable)
 			i := 1
 			maxIterations := 20
 			for {
@@ -213,13 +251,12 @@ func Test_rolloutSequences(t *testing.T) {
 
 				taskOrder := defaultTaskOrder(current)
 				if tt.randomControllerOrder {
-					taskOrder = randomTaskOrder(current)
+					taskOrder = randomTaskOrder(current, rng)
 				}
 				for _, taskID := range taskOrder {
 					if taskID == 0 {
-						if tt.randomControllerOrder {
-							t.Logf("[MD controller] Iteration %d, Reconcile md", i)
-						}
+						fileLogger.Logf("[MD controller] Iteration %d, Reconcile md", i)
+
 						// Running a small subset of MD reconcile (the rollout logic and a bit of setReplicas)
 						p := &rolloutPlanner{
 							getCanUpdateDecision: func(oldMS *clusterv1.MachineSet) bool {
@@ -236,7 +273,7 @@ func Test_rolloutSequences(t *testing.T) {
 						current.machineDeployment.Status.AvailableReplicas = mdutil.GetAvailableReplicaCountForMachineSets(machineSets)
 
 						// Log state after this reconcile
-						fileLogger.Logf("[MD controller] Result of rollout planner, iteration %d\n%s", i, current)
+						fileLogger.Logf("[MD controller] - Result of rollout planner\n%s", current)
 
 						// Check we are not breaching rollout constraints
 						minAvailableReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) - mdutil.MaxUnavailable(*current.machineDeployment)
@@ -274,9 +311,7 @@ func Test_rolloutSequences(t *testing.T) {
 					// Run mutators faking other controllers
 					for _, ms := range current.machineSets {
 						if fmt.Sprintf("ms%d", taskID) == ms.Name {
-							if tt.randomControllerOrder {
-								t.Logf("[MS controller] Iternation %d, Reconcile ms%d", i, taskID)
-							}
+							fileLogger.Logf("[MS controller] Iteration %d, Reconcile ms%d", i, taskID)
 							msControllerMutator(fileLogger, ms, current, directives)
 							break
 						}
@@ -316,21 +351,20 @@ func defaultTaskOrder(current *rolloutScope) []int {
 	return taskOrder
 }
 
-var rng = rand.New(rand.NewSource(0))
-
-func randomTaskOrder(current *rolloutScope) []int {
+func randomTaskOrder(current *rolloutScope, rng *rand.Rand) []int {
 	u := &UniqueRand{
+		rng:       rng,
 		generated: map[int]bool{},
 		max:       len(current.machineSets) + 1 + 1, // +1 is for the machine ms that might be created when reconciling md,
 	}
 	taskOrder := []int{}
 	for {
 		n := u.Int()
-		if rng.Int()%10 < 3 { // skip a step in the 30% of cases
+		if u.rng.Int()%10 < 3 { // skip a step in the 30% of cases
 			continue
 		}
 		taskOrder = append(taskOrder, n)
-		if r := rng.Int() % 10; r < 3 { // repeat a step in the 30% of cases
+		if r := u.rng.Int() % 10; r < 3 { // repeat a step in the 30% of cases
 			delete(u.generated, n)
 		}
 		if len(u.generated) >= u.max {
@@ -341,6 +375,7 @@ func randomTaskOrder(current *rolloutScope) []int {
 }
 
 type UniqueRand struct {
+	rng       *rand.Rand
 	generated map[int]bool // keeps track of
 	max       int          // max number to be generated
 }
@@ -350,7 +385,7 @@ func (u *UniqueRand) Int() int {
 		return -1
 	}
 	for {
-		i := rng.Int() % u.max
+		i := u.rng.Int() % u.max
 		if !u.generated[i] {
 			u.generated[i] = true
 			return i
@@ -660,7 +695,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 	// e.g. if the cluster is initialize with m1, m2, m3, new machines will be m4, m5, m6
 	if ptr.Deref(ms.Spec.Replicas, 0) > ptr.Deref(ms.Status.Replicas, 0) {
 		if sourceMSs, ok := ms.Annotations[scaleUpWaitForReplicasAnnotationName]; ok && sourceMSs != "" {
-			log.Logf("[MS controller] %s is waiting for replicas from %s to scale up to %d/%[3]d replicas", ms.Name, sourceMSs, ptr.Deref(ms.Spec.Replicas, 0))
+			log.Logf("[MS controller] - %s is waiting for replicas from %s to scale up to %d/%[3]d replicas", ms.Name, sourceMSs, ptr.Deref(ms.Spec.Replicas, 0))
 		} else {
 			machinesToAdd := ptr.Deref(ms.Spec.Replicas, 0) - ptr.Deref(ms.Status.Replicas, 0)
 			machinesAdded := []string{}
@@ -671,7 +706,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				)
 				machinesAdded = append(machinesAdded, machineName)
 			}
-			log.Logf("[MS controller] %s scale up to %d/%[2]d replicas (%s created)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesAdded, ","))
+			log.Logf("[MS controller] - %s scale up to %d/%[2]d replicas (%s created)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesAdded, ","))
 		}
 	}
 	// if too many replicas, delete exceeding machines.
@@ -688,7 +723,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 					}
 				}
 				if targetMS == nil {
-					log.Logf("[MS controller] PANIC! %s is set to send replicas to %s, which does not exists", ms.Name, targetMSName)
+					log.Logf("[MS controller] - PANIC! %s is set to send replicas to %s, which does not exists", ms.Name, targetMSName)
 					return
 				}
 
@@ -696,7 +731,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				sourcesSet := sets.Set[string]{}
 				sourcesSet.Insert(strings.Split(validSourceMSs, ",")...)
 				if !sourcesSet.Has(ms.Name) {
-					log.Logf("[MS controller] PANIC! %s is set to send replicas to %s, but %[2]s only accepts machines from %s", ms.Name, targetMS.Name, validSourceMSs)
+					log.Logf("[MS controller] - PANIC! %s is set to send replicas to %s, but %[2]s only accepts machines from %s", ms.Name, targetMS.Name, validSourceMSs)
 					return
 				}
 
@@ -708,7 +743,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				}
 				scope.machineSetMachines[ms.Name] = scope.machineSetMachines[ms.Name][machinesToMove:]
 
-				log.Logf("[MS controller] %s scale down to %d/%[2]d replicas (%s moved to %s)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesMoved, ","), targetMS.Name)
+				log.Logf("[MS controller] - %s scale down to %d/%[2]d replicas (%s moved to %s)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesMoved, ","), targetMS.Name)
 			}
 		} else {
 			machinesToDelete := ptr.Deref(ms.Status.Replicas, 0) - ptr.Deref(ms.Spec.Replicas, 0)
@@ -717,7 +752,7 @@ func msControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutSc
 				machinesDeleted = append(machinesDeleted, scope.machineSetMachines[ms.Name][i].Name)
 			}
 			scope.machineSetMachines[ms.Name] = scope.machineSetMachines[ms.Name][machinesToDelete:]
-			log.Logf("[MS controller] %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
+			log.Logf("[MS controller] - %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
 		}
 	}
 
@@ -730,6 +765,7 @@ type logger struct {
 	t *testing.T
 
 	testCase              string
+	fileName              string
 	testCaseStringBuilder strings.Builder
 }
 
@@ -737,12 +773,13 @@ func newLogger(t *testing.T) *logger {
 	return &logger{t: t, testCaseStringBuilder: strings.Builder{}}
 }
 
-func (l *logger) NewTestCase(name string) {
+func (l *logger) NewTestCase(name, fileName string) {
 	if l.testCase != "" {
 		l.testCaseStringBuilder.Reset()
 	}
 	l.testCaseStringBuilder.WriteString(fmt.Sprintf("## %s\n\n", name))
 	l.testCase = name
+	l.fileName = fileName
 }
 
 func (l *logger) Logf(format string, args ...interface{}) {
@@ -766,12 +803,12 @@ func (l *logger) Logf(format string, args ...interface{}) {
 }
 
 func (l *logger) EndTestCase() (string, string) {
-	os.WriteFile(fmt.Sprintf("%s.test.log", l.testCase), []byte(l.testCaseStringBuilder.String()), 0666)
+	os.WriteFile(fmt.Sprintf("%s.test.log", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
 
-	currentBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log", l.testCase))
+	currentBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log", l.fileName))
 	current := string(currentBytes)
 
-	goldenBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log.golden", l.testCase))
+	goldenBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log.golden", l.fileName))
 	golden := string(goldenBytes)
 
 	return current, golden
