@@ -16,6 +16,7 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/controllers/machinedeployment/mdutil"
+	"sigs.k8s.io/cluster-api/util"
 )
 
 type rolloutPlanner struct {
@@ -23,7 +24,7 @@ type rolloutPlanner struct {
 	scaleIntents         map[string]int32
 }
 
-func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet) ([]*clusterv1.MachineSet, error) {
+func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet, machines []*clusterv1.Machine) ([]*clusterv1.MachineSet, error) {
 	newMS, oldMSs, err := p.getAllMachineSetsAndSyncRevision(ctx, md, msList)
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.Machi
 
 	p.scaleIntents = make(map[string]int32)
 
-	p.reconcileReplicasAfterMoveToNewMS(ctx, md, newMS)
+	p.reconcileReplicasPendingAcknowledgeMove(ctx, md, newMS, machines)
 
 	// FIXME(feedback): how are reconcileNewMachineSet & reconcileOldMachineSets counting Machines that are going through an in-place update
 	//  e.g. if they are just counted as available we won't respect maxUnavailable correctly: Answer
@@ -132,11 +133,13 @@ func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context, allMSs []*c
 	}
 
 	if newReplicasCount < *(newMS.Spec.Replicas) {
-		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas", newMS.Name, newReplicasCount))
+		scaleDownCount := *(newMS.Spec.Replicas) - newReplicasCount
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d)", newMS.Name, newReplicasCount, scaleDownCount))
 		p.scaleIntents[newMS.Name] = newReplicasCount
 	}
 	if newReplicasCount > *(newMS.Spec.Replicas) {
-		log.V(5).Info(fmt.Sprintf("Setting scale up intent for %s to %d replicas", newMS.Name, newReplicasCount))
+		scaleUpCount := newReplicasCount - *(newMS.Spec.Replicas)
+		log.V(5).Info(fmt.Sprintf("Setting scale up intent for %s to %d replicas (+%d)", newMS.Name, newReplicasCount, scaleUpCount))
 		p.scaleIntents[newMS.Name] = newReplicasCount
 	}
 	return nil
@@ -265,7 +268,7 @@ func (p *rolloutPlanner) scaleDownOldMachineSetsForRollingUpdate(ctx context.Con
 				client.ObjectKeyFromObject(targetMS), *(targetMS.Spec.Replicas), newReplicasCount)
 		}
 
-		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas", targetMS.Name, newReplicasCount))
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d)", targetMS.Name, newReplicasCount, scaleDownCount))
 		p.scaleIntents[targetMS.Name] = newReplicasCount
 		totalScaledDown += scaleDownCount
 	}
@@ -273,37 +276,37 @@ func (p *rolloutPlanner) scaleDownOldMachineSetsForRollingUpdate(ctx context.Con
 	return totalScaledDown, nil
 }
 
-// reconcileReplicasAfterMoveToNewMS adjust the replica count for the newMS after a move operation from oldMSs to newMS has been completed.
+// reconcileReplicasPendingAcknowledgeMove adjust the replica count for the newMS after a move operation has been completed.
 // Note: This operation must be performed before computing scale up/down for all the MachineSets (so this operation can take into account also moved machines in the current reconcile).
-func (p *rolloutPlanner) reconcileReplicasAfterMoveToNewMS(ctx context.Context, md *clusterv1.MachineDeployment, newMS *clusterv1.MachineSet) {
+func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Context, md *clusterv1.MachineDeployment, newMS *clusterv1.MachineSet, machines []*clusterv1.Machine) {
 	log := ctrl.LoggerFrom(ctx)
 
-	// Drop machines from the replicasAcknowledgeByMachineDeploymentAnnotation when those machines are not anymore in the replicasAcknowledgeByMachineSetAnnotation annotation.
-	// Note: Under normal circumstances this happen after the newMS controller reconcile the replicasAcknowledgeByMachineDeployment signal for a replica,
-	// but this code also acts a catch-all cleanup logic.
-	for _, m := range getReplicasAcknowledgeByMachineDeployment(newMS).UnsortedList() {
-		if !getReplicasAcknowledgeByMachineSet(newMS).Has(m) {
-			removeReplicasAcknowledgeByMachineDeployment(newMS, m)
-		}
-	}
-
-	// Acknowledge replicas already Acknowledged by the MS controller after a move operation, and not yet acknowledge by the MachineDeployment,
-	// by scale up the newMS to reflect the fact that the MS controller has a new replica to take care of.
-	totNewAcceptedReplicas := int32(0)
-	acceptedReplicas := []string{}
-	for _, m := range getReplicasAcknowledgeByMachineSet(newMS).UnsortedList() {
-		if getReplicasAcknowledgeByMachineDeployment(newMS).Has(m) {
+	// Acknowledge replicas after a move operation.
+	// NOTE: pendingMoveAcknowledgeMove annotation from machine (managed by the MS controller) and acknowledgeMove annotation on the newMS (managed by the rollout planner)
+	// are used in combination to ensure moved replicas are counted only once by the rollout planner.
+	// NOTE: acknowledgeMove is recomputed entirely at every reconcile; this is intentional to account for machines deleted out of band or other race conditions and/or for ensuring annotation cleanup.
+	oldAcknowledgeMoveReplicas := getAcknowledgeMoveMachines(newMS)
+	newAcknowledgeMoveReplicas := sets.Set[string]{}
+	totNewAcknowledgeMoveReplicasToScaleUp := int32(0)
+	for _, m := range machines {
+		if !util.IsControlledBy(m, newMS, clusterv1.GroupVersion.WithKind("MachineSet").GroupKind()) {
 			continue
 		}
-		totNewAcceptedReplicas++
-		acceptedReplicas = append(acceptedReplicas, m)
-		addReplicasAcknowledgeByMachineDeployment(newMS, m)
+		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; !ok {
+			continue
+		}
+		if !oldAcknowledgeMoveReplicas.Has(m.Name) {
+			totNewAcknowledgeMoveReplicasToScaleUp++
+		}
+		newAcknowledgeMoveReplicas.Insert(m.Name)
 	}
-	if totNewAcceptedReplicas > 0 {
-		replicaCount := min(ptr.Deref(newMS.Spec.Replicas, 0)+totNewAcceptedReplicas, ptr.Deref(md.Spec.Replicas, 0))
+	if totNewAcknowledgeMoveReplicasToScaleUp > 0 {
+		replicaCount := min(ptr.Deref(newMS.Spec.Replicas, 0)+totNewAcknowledgeMoveReplicasToScaleUp, ptr.Deref(md.Spec.Replicas, 0))
+		scaleUpCount := replicaCount - ptr.Deref(newMS.Spec.Replicas, 0)
 		newMS.Spec.Replicas = ptr.To(replicaCount)
-		log.V(5).Info(fmt.Sprintf("Scale up %s to %d replicas to acknowledge %s moved from an old MachineSet", newMS.Name, replicaCount, sortAndJoin(acceptedReplicas)))
+		log.V(5).Info(fmt.Sprintf("Acknowledge replicas %s moved from an old MachineSet. Scale up %s to %d (+%d)", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()), newMS.Name, replicaCount, scaleUpCount))
 	}
+	setAcknowledgeMachines(newMS, newAcknowledgeMoveReplicas.UnsortedList()...)
 }
 
 func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
@@ -342,9 +345,17 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 
 	// Check if candidate MS can update in place.
 	totInPlaceUpdated := int32(0)
+	exceedTarget := false
 	for _, oldMS := range oldMSs {
 		if !inPlaceUpdateCandidates.Has(oldMS.Name) {
 			continue
+		}
+
+		// If we already detect that the system is going to update in place enough machines to reach the target (md.Spec.Replicas)
+		// Revisit scale down target to prevent unnecessary operations.
+		if exceedTarget {
+			delete(p.scaleIntents, oldMS.Name)
+			log.V(5).Info(fmt.Sprintf("Drop scale down intent for %s to prenvent unnecessary in-place updates", oldMS.Name))
 		}
 
 		// FIXME: Think about how to propagate all the info required for the canUpdate from getAllMachineSetsAndSyncRevision to here.
@@ -367,6 +378,20 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 		}
 
 		inPlaceUpdated := max(ptr.Deref(oldMS.Spec.Replicas, 0)-scaleIntent, 0)
+
+		// If we detect that the system is going to update in place machines that will be deleted (more machines than md.Spec.Replicas)
+		// Revisit scale down target to prevent unnecessary operations.
+		if ptr.Deref(newMS.Spec.Replicas, 0)+inPlaceUpdated > ptr.Deref(md.Spec.Replicas, 0) {
+			exceedTarget = true
+			maxInPlaceUpdated := max(ptr.Deref(md.Spec.Replicas, 0)-ptr.Deref(newMS.Spec.Replicas, 0), 0)
+			newReplicasCount := max(ptr.Deref(oldMS.Spec.Replicas, 0)-maxInPlaceUpdated, 0)
+			scaleDownCount := ptr.Deref(oldMS.Spec.Replicas, 0) - newReplicasCount
+			p.scaleIntents[oldMS.Name] = newReplicasCount
+			log.V(5).Info(fmt.Sprintf("Revisit scale down intent for %s to %d replicas (-%d) to prenvent unnecessary in-place updates", oldMS.Name, newReplicasCount, scaleDownCount))
+
+			inPlaceUpdated = maxInPlaceUpdated
+		}
+
 		if inPlaceUpdated > 0 {
 			totInPlaceUpdated += inPlaceUpdated
 
@@ -466,99 +491,35 @@ func removeMachineSetFromAcceptReplicasFrom(ms *clusterv1.MachineSet, fromMS str
 	ms.Annotations[acceptReplicasFromAnnotationName] = sortAndJoin(sourcesList)
 }
 
-// replicaPendingMachineDeploymentAcknowledgeAnnotationName is an internal annotation added by the MS controller to a machine when being
-// moved from the oldMS to the newMS. The annotation is removed as soon as the machine is accepted by the newMS and recognized by the corresponding MD.
+// pendingAcknowledgeMoveAnnotationName is an internal annotation added by the MS controller to a machine when being
+// moved from the oldMS to the newMS. The annotation is removed as soon as the MS controller get the acknowledge from the corresponding MD.
 // Note: the annotation is added when reconciling the oldMS, and it is removed when reconciling the newMS:
-const replicaPendingMachineDeploymentAcknowledgeAnnotationName = "internal.cluster.x-k8s.io/replica-pending-md-acknowledge"
+const pendingAcknowledgeMoveAnnotationName = "internal.cluster.x-k8s.io/pending-acknowledge-move"
 
-// replicasMachineSetAcknowledgeAnnotationName is an internal annotation with a list of machines added by the MS controller
-// to a MachineSet when it acknowledges a machine replica that has neen moved from an oldMS (and yet to be updated in-place).
-// A machine is dropped from this annotation as soon as also the MD controller acknowledge the same replica;
+// acknowledgeAnnotationName is an internal annotation with a list of machines added by the MD controller
+// to a MachineSet when it acknowledges a machine pending acknowled after being moved from an oldMS.
+// A machine is dropped from this annotation as soon as pending-acknowledge-move is removed from the machine;
 // the annotation is dropped when empty.
 // Note: this annotation is used in pair with replicasMachineDeploymentAcknowledgeAnnotation and replicaPendingMachineDeploymentAcknowledgeAnnotation.
-const replicasMachineSetAcknowledgeAnnotationName = "internal.cluster.x-k8s.io/replicas-acknowledge"
+const acknowledgeMoveAnnotationName = "internal.cluster.x-k8s.io/acknowledge-move"
 
-func getReplicasAcknowledgeByMachineSet(ms *clusterv1.MachineSet) sets.Set[string] {
+func getAcknowledgeMoveMachines(ms *clusterv1.MachineSet) sets.Set[string] {
 	sourcesSet := sets.Set[string]{}
-	currentList := ms.Annotations[replicasMachineSetAcknowledgeAnnotationName]
+	currentList := ms.Annotations[acknowledgeMoveAnnotationName]
 	if currentList != "" {
 		sourcesSet.Insert(strings.Split(currentList, ",")...)
 	}
 	return sourcesSet
 }
 
-func addReplicaAcknowledgeByMachineSet(ms *clusterv1.MachineSet, machines ...string) {
+func setAcknowledgeMachines(ms *clusterv1.MachineSet, machines ...string) {
+	if len(machines) == 0 {
+		delete(ms.Annotations, acknowledgeMoveAnnotationName)
+	}
 	if ms.Annotations == nil {
 		ms.Annotations = map[string]string{}
 	}
-
-	sourcesSet := getReplicasAcknowledgeByMachineSet(ms)
-	sourcesSet.Insert(machines...)
-
-	sourcesList := sourcesSet.UnsortedList()
-	sort.Strings(sourcesList)
-	ms.Annotations[replicasMachineSetAcknowledgeAnnotationName] = strings.Join(sourcesList, ",")
-}
-
-func removeReplicaAcknowledgeByMachineSet(ms *clusterv1.MachineSet, machine string) {
-	sourcesSet := getReplicasAcknowledgeByMachineSet(ms)
-	if !sourcesSet.Has(machine) {
-		return
-	}
-
-	sourcesSet.Delete(machine)
-	if sourcesSet.Len() == 0 {
-		delete(ms.Annotations, replicasMachineSetAcknowledgeAnnotationName)
-		return
-	}
-
-	sourcesList := sourcesSet.UnsortedList()
-	ms.Annotations[replicasMachineSetAcknowledgeAnnotationName] = sortAndJoin(sourcesList)
-}
-
-// replicasMachineDeploymentAcknowledgeAnnotationName is an internal annotation with a list of machines added by the MD controller
-// to a MachineSet when it acknowledges a machine replica that has neen moved from an oldMS.
-// A machine is dropped from the annotation is removed as soon as the MS controller removes it from the replicasMachineSetAcknowledgeAnnotation,
-// which signals the completion of the replica acknowledge workflow; the annotation is dropped when empty.
-// Note: this annotation is used in pair with replicasMachineSetAcknowledgeAnnotationName and replicaPendingMachineDeploymentAcknowledgeAnnotation.
-const replicasMachineDeploymentAcknowledgeAnnotationName = "internal.cluster.x-k8s.io/replicas-machinedeployment-acknowledge"
-
-func getReplicasAcknowledgeByMachineDeployment(ms *clusterv1.MachineSet) sets.Set[string] {
-	sourcesSet := sets.Set[string]{}
-	currentList := ms.Annotations[replicasMachineDeploymentAcknowledgeAnnotationName]
-	if currentList != "" {
-		sourcesSet.Insert(strings.Split(currentList, ",")...)
-	}
-	return sourcesSet
-}
-
-func addReplicasAcknowledgeByMachineDeployment(ms *clusterv1.MachineSet, machines ...string) {
-	if ms.Annotations == nil {
-		ms.Annotations = map[string]string{}
-	}
-
-	sourcesSet := getReplicasAcknowledgeByMachineDeployment(ms)
-	sourcesSet.Insert(machines...)
-
-	sourcesList := sourcesSet.UnsortedList()
-	sort.Strings(sourcesList)
-	ms.Annotations[replicasMachineDeploymentAcknowledgeAnnotationName] = strings.Join(sourcesList, ",")
-}
-
-func removeReplicasAcknowledgeByMachineDeployment(ms *clusterv1.MachineSet, machine string) {
-	sourcesSet := getReplicasAcknowledgeByMachineDeployment(ms)
-	if !sourcesSet.Has(machine) {
-		return
-	}
-
-	sourcesSet.Delete(machine)
-	if sourcesSet.Len() == 0 {
-		delete(ms.Annotations, replicasMachineDeploymentAcknowledgeAnnotationName)
-		return
-	}
-
-	sourcesList := sourcesSet.UnsortedList()
-	ms.Annotations[replicasMachineDeploymentAcknowledgeAnnotationName] = sortAndJoin(sourcesList)
+	ms.Annotations[acknowledgeMoveAnnotationName] = sortAndJoin(machines)
 }
 
 // cleanupOutdatedInPlaceMoveAnnotations ensure thet all the outdated move annotations from previous reconcile are cleaned up:
@@ -572,8 +533,7 @@ func cleanupOutdatedInPlaceMoveAnnotations(oldMSs []*clusterv1.MachineSet, newMS
 	for _, oldMS := range oldMSs {
 		// - oldMs are not waiting for replicas (only newMS could be waiting)
 		delete(oldMS.Annotations, acceptReplicasFromAnnotationName)
-		delete(oldMS.Annotations, replicasMachineSetAcknowledgeAnnotationName) // FIXME: evealuate if/how to clean up this annotation int the MS controller (the "owner" of this annotation)
-		delete(oldMS.Annotations, replicasMachineDeploymentAcknowledgeAnnotationName)
+		delete(oldMS.Annotations, acknowledgeMoveAnnotationName)
 
 		// - oldMs are not moving replicas when there are no more replicas to move
 		// FIXME: This cleanup should be done also outside of the rollout process.
