@@ -228,8 +228,8 @@ func Test_rolloutSequences(t *testing.T) {
 			maxUnavailable:      1,
 			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
 			// desiredMachineNames: []string{"m1", "m2", "m3", "m4", "m7", "m8"}, // V1, planner is not taking full advantage of maxSurge (depending on ms reconcile order)
-			desiredMachineNames: []string{"m1", "m2", "m3", "m7", "m8", "m9"}, // V2. planner is now taking full advantage of maxSurge; after discussing this, we decide to go in another direction:
-			// desiredMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"}, // FIXME: this is what we want to achieve with V3: when in-place is possible, try to do as much as possible machines with in-place, even if this implies "ignoring" maxSurge (maxSurge must still be used when doing regular rollouts)
+			// desiredMachineNames: []string{"m1", "m2", "m3", "m7", "m8", "m9"}, // V2. planner is now taking full advantage of maxSurge; after discussing this, we decide to go in another direction:
+			desiredMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"}, // V3: when in-place is possible, try to do as much as possible machines with in-place, even if this implies "ignoring" maxSurge (maxSurge must still be used when doing regular rollouts)
 			// addAdditionalOldMachineSetWithNewSpec: true,
 			getCanUpdateDecision:  oldMSCanAlwaysInPlaceUpdate,
 			randomControllerOrder: true,
@@ -271,7 +271,7 @@ func Test_rolloutSequences(t *testing.T) {
 			fileLogger.Logf("[Test] Initial state\n%s", current)
 			fileLogger.Logf("[Test] Rollout %d replicas, MaxSurge=%d, MaxUnavailable=%d\n", len(tt.currentMachineNames), tt.maxSurge, tt.maxUnavailable)
 			i := 1
-			maxIterations := 20
+			maxIterations := 50
 			for {
 				// Run scope mutators faking users actions in the middle of a rollout
 				if len(tt.currentStateMutators) > 0 {
@@ -320,7 +320,7 @@ func Test_rolloutSequences(t *testing.T) {
 
 						// Check we are not breaching rollout constraints
 						minAvailableReplicas := ptr.Deref(current.machineDeployment.Spec.Replicas, 0) - mdutil.MaxUnavailable(*current.machineDeployment)
-						totAvailableReplicas := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(current.machineSets), 0)
+						totAvailableReplicas := ptr.Deref(current.machineDeployment.Status.AvailableReplicas, 0)
 						if totAvailableReplicas < minAvailableReplicas {
 							tolerateBreach := false
 							for _, tolerationFunc := range tt.minAvailableBreachSilencers {
@@ -681,7 +681,10 @@ func msLog(ms *clusterv1.MachineSet, machines []*clusterv1.Machine) string {
 	for _, m := range machines {
 		name := m.Name
 		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; ok && !acknowledgeMoveMachines.Has(name) {
-			name = name + "*"
+			name = name + "🟠"
+		}
+		if _, ok := m.Annotations[updatingInPlaceAnnotationName]; ok {
+			name = name + "🟡"
 		}
 		machineNames = append(machineNames, name)
 	}
@@ -788,12 +791,28 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 		return
 	}
 
+	// Update counters
+	ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
+
+	// FIXME: when implementing in production code, make sure to not start in-place upgrades for machines pending a move Acknowledge
+
 	// Sort machines to ensure stable results of move/delete operations during tests.
 	sortMachineSetMachines(scope.machineSetMachines[ms.Name])
 
-	// Update counters
-	ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
-	ms.Status.AvailableReplicas = ms.Status.Replicas
+	// Removing updatingInPlaceAnnotation after pendingAcknowledgeMove is gone in a previous reconcile (so inPlaceUpdating lasts one reconcile more)
+	replicasEndingInPlaceUpdate := sets.Set[string]{}
+	for _, m := range scope.machineSetMachines[ms.Name] {
+		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; ok {
+			continue
+		}
+		if _, ok := m.Annotations[updatingInPlaceAnnotationName]; ok {
+			delete(m.Annotations, updatingInPlaceAnnotationName)
+			replicasEndingInPlaceUpdate.Insert(m.Name)
+		}
+	}
+	if replicasEndingInPlaceUpdate.Len() > 0 {
+		log.Logf("[MS controller] - Replicas %s completed in place update", sortAndJoin(replicasEndingInPlaceUpdate.UnsortedList()))
+	}
 
 	// If the MachineSet is accepting replicas from other MS (this is the newMS controller by a MD),
 	// detect if there are replicas still pending AcknowledgeMove.
@@ -831,9 +850,7 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 	// if too few machines, create missing machine.
 	// new machines are created with a predictable name, so it is easier to write test case and validate rollout sequences.
 	// e.g. if the cluster is initialized with m1, m2, m3, new machines will be m4, m5, m6
-	// Note: replicas still pending AcknowledgeMove should not be counted when computing the numbers of machines to add, because those machines are not included in ms.Spec.Replicas yet.
-	// Without this check, those machines are going "to steal slots" from additional machines created for maxSurge or scaleUp.
-	machinesToAdd := max(ptr.Deref(ms.Spec.Replicas, 0)+int32(notAcknowledgeMoveReplicas.Len()), 0) - ptr.Deref(ms.Status.Replicas, 0)
+	machinesToAdd := ptr.Deref(ms.Spec.Replicas, 0) - ptr.Deref(ms.Status.Replicas, 0)
 	if machinesToAdd > 0 {
 		machinesAdded := []string{}
 		for range machinesToAdd {
@@ -888,7 +905,7 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 					return
 				}
 
-				// FIXME: when implementing in production code, make sure to to move machines pending an in-place upgrade, with an in-place upgrade in progress, deleted or marked for deletion, unhealthy
+				// FIXME: when implementing in production code, make sure to not move machines pending a move Acknowledge, with an in-place upgrade in progress, deleted or marked for deletion, unhealthy
 
 				machinesMoved := []string{}
 				machinesSetMachines := []*clusterv1.Machine{}
@@ -917,6 +934,7 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 						},
 					}
 					m.Annotations[pendingAcknowledgeMoveAnnotationName] = ""
+					m.Annotations[updatingInPlaceAnnotationName] = ""
 					scope.machineSetMachines[targetMS.Name] = append(scope.machineSetMachines[targetMS.Name], m)
 					machinesMoved = append(machinesMoved, m.Name)
 				}
@@ -948,7 +966,14 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 
 	// Update counters
 	ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
-	ms.Status.AvailableReplicas = ms.Status.Replicas
+	availableReplicas := int32(0)
+	for _, m := range scope.machineSetMachines[ms.Name] {
+		if _, ok := m.Annotations[updatingInPlaceAnnotationName]; ok {
+			continue
+		}
+		availableReplicas++
+	}
+	ms.Status.AvailableReplicas = ptr.To(availableReplicas)
 }
 
 type logger struct {
