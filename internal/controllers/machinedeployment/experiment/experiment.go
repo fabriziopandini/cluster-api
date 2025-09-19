@@ -56,6 +56,7 @@ func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.Machi
 	}
 
 	// FIXME: change this to do a patch
+	// FIXME: make sure in place annotation are not propagated
 
 	// Apply changes.
 	if scaleIntent, ok := p.scaleIntents[newMS.Name]; ok {
@@ -66,9 +67,6 @@ func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.Machi
 			oldMS.Spec.Replicas = ptr.To(int32(scaleIntent))
 		}
 	}
-
-	// FIXME: make sure in place annotation are not propagated
-
 	return allMSs, nil
 }
 
@@ -105,6 +103,7 @@ func (p *rolloutPlanner) getAllMachineSetsAndSyncRevision(ctx context.Context, m
 
 func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context, allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
 	// FIXME: cleanupDisableMachineCreateAnnotation
+
 	log := ctrl.LoggerFrom(ctx)
 
 	if md.Spec.Replicas == nil {
@@ -283,10 +282,9 @@ func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Con
 
 	// Cleanup the acknowledgeMove annotation from oldMS to handle the case newMS was different in previous reconcile.
 	// Note: we must preserve acknowledgeMove annotation in the newMS to avoid double accounting of moved replicas.
-	// this is not an issue because the annotation is recomputed entirely overwritten at every reconcile after achieving this goal;
-	// Recomputing and overwriting the annotation at every reconcile also ensures cleanup or replicas after pendingAcknowledgeMove
-	// annotation is removed from machine, and also cleanup for replicas deleted out of band or other race conditions making the
-	// previous list of replicas outdated.
+	// However, the annotation is recomputed from scratch at every reconcile and overwritten once accounting of moved replicas is completed;
+	// by recomputing the annotation we perform cleanup of replica names after pendingAcknowledgeMove annotation is removed from machine,
+	// as well as cleanup for replicas deleted out of band or other race conditions making the previous list of replica names outdated.
 	for _, oldMS := range oldMSs {
 		delete(oldMS.Annotations, acknowledgeMoveAnnotationName)
 	}
@@ -320,20 +318,21 @@ func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Con
 
 // reconcileInPlaceUpdateIntent ensures CAPI rollouts changes by performing in-place updates whenever possible.
 //
-// When calling this func, new and old MS have their scale intent, which was computed under the assumption that
+// When calling this func, new and old MS already have their scale intent, which was computed under the assumption that
 // rollout is going to happen by delete/re-create, and thus it will impact availability.
 //
-// Also in place updates ares assumed to impact availability (even if the in place update technically is not impacting workloads,
-// the system must account for scenarios when the operation fails, leading to remediation of the machine/unavailability).
-// As a consequence, unless the user accounts for this unavailability by setting MaxUnavailable >= 1,
-// rollout with in-place will create one additional machine to ensure MaxUnavailable == 0 is respected.
+// Also in place updates are assumed to impact availability, even if the in place update technically is not impacting workloads,
+// the system must account for scenarios when the operation fails, leading to remediation of the machine/unavailability.
+//
+// As a consequence:
+//   - this function can rely on scale intent previously computed, and just influence how rollout is performed.
+//   - unless the user accounts for this unavailability by setting MaxUnavailable >= 1,
+//     rollout with in-place will create one additional machine to ensure MaxUnavailable == 0 is respected.
 //
 // NOTE: if an in-place upgrade is possible and maxSurge is >= 1, creation of additional machines due to maxSurge is capped to 1 or entirely dropped.
 // Instead, creation of new machines due to scale up goes through as usual.
 func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment, machines []*clusterv1.Machine) error {
 	log := ctrl.LoggerFrom(ctx)
-
-	// TODO move comment a func level, comment about priority on in place
 
 	// Cleanup acknowledgeMoveAnnotation from previous reconcile.
 	// Note: Cleanup account also for the case when newMS was different in previous reconcile.
@@ -359,7 +358,7 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 		}
 
 		// FIXME: Think about how to propagate all the info required for the canUpdate from getAllMachineSetsAndSyncRevision to here.
-		// TODO: Possible optimization, if a move to the same target is already in progress, do not ask again
+		// FIXME: implement caching (let' avoid to keep asking if MD & MD are the same)
 		canUpdateDecision := p.getCanUpdateDecision(oldMS)
 		log.V(5).Info(fmt.Sprintf("CanUpdate decision for %s: %t", oldMS.Name, canUpdateDecision))
 
