@@ -26,79 +26,38 @@ import (
 	"sigs.k8s.io/cluster-api/internal/controllers/machinedeployment/mdutil"
 )
 
-// stateMutators are func that can change state in the middle of a rollout sequence.
-// Note: those func are run before every iteration; when state are mutated, the func must return true.
-type stateMutator func(log *logger, i int, scope *rolloutScope) bool
-
-// minAvailableBreachSilencer are func that can be used to temporarily silence MinAvailable breaches in the middle of a rollout sequence.
-type minAvailableBreachSilencer func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool
-
-// maxSurgeBreachSilencer are func that can be used to temporarily silence maxSurge breaches in the middle of a rollout sequence.
-type maxSurgeBreachSilencer func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool
-
-// directivesGenerator are func that return directives to be used by the fake MachineSet controller or by the fake Machine controller.
-type directivesGenerator func(log *logger, i int, scope *rolloutScope) []string
-
 type rolloutSequenceTestCase struct {
 	name           string
 	maxSurge       int32
 	maxUnavailable int32
-	// currentMachineNames is the list of machines before the rollout.
+
+	// currentMachineNames is the list of machines before the rollout, and provides a simplified alternative to currentScope.
 	// all the machines in this list are initialized as upToDate and owned by the new MD before the rollout.
 	// Please name machines as "mX" where X is a progressive number starting from 1 (do not skip numbers),
 	// e.g. "m1","m2","m3"
 	currentMachineNames []string
 
-	// Add another MS to the state before the rollout. This MS must stay at 0 replicas.
-	addAdditionalOldMachineSet bool
-
-	// Add another MS to the state before the rollout. This MS must be used during the rollout and become owner of all the desired machines.
-	addAdditionalOldMachineSetWithNewSpec bool
-
-	// currentStateMutators allows to simulate users actions in the middle of a rollout
-	// Note: those func are run before every iteration.
-	//
-	// currentStateMutators: []stateMutator{
-	// 	func(log *logger, i int, scope *rolloutScope) bool {
-	// 		if i == 5 {
-	// 			t.Log("[User] scale up MD to 4 replicas")
-	// 			scope.machineDeployment.Spec.Replicas = ptr.To(int32(4))
-	// 			return true
-	// 		}
-	// 		return false
-	// 	},
-	// },
-	currentStateMutators []stateMutator
+	// currentScope defines the current state at the beginning of the test case.
+	// When the test case start from a stable state (there are no previous rollout in progress), use  currentMachineNames instead.
+	// Please name machines as "mX" where X is a progressive number starting from 1 (do not skip numbers),
+	// e.g. "m1","m2","m3"
+	// machineUID must be set to the last used number.
+	currentScope *rolloutScope
 
 	// minAvailableBreachSilencers can be used to temporarily silence MinAvailable breaches
 	//
-	// minAvailableBreachSilencers: []minAvailableBreachSilencer{
-	// 	func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+	// minAvailableBreachToleration: func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
 	// 		if i == 5 {
 	// 			t.Log("[Toleration] tolerate minAvailable breach after scale up")
 	// 			return true
 	// 		}
 	// 		return false
 	// 	},
-	// },
-	minAvailableBreachSilencers []minAvailableBreachSilencer
+	minAvailableBreachToleration func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool
 
-	// maxSurgeBreachSilencers can be used to temporarily silence MaxSurge breaches
-	// (see minAvailableBreachSilencers example)
-	maxSurgeBreachSilencers []maxSurgeBreachSilencer
-
-	// machineSetControllerDirectiveGenerators can be used to provide directives to be used by the fake MachineSet controller.
-	//
-	// machineSetControllerDirectiveGenerators: []directivesGenerator{
-	// 	func(log *logger, i int, scope *rolloutScope) []string {
-	// 		if i == 1 {
-	// 			t.Log("[Directive] ms2 skip reconcile")
-	// 			return []string{"ms2-SKIP-RECONCILE"}
-	// 		}
-	// 		return nil
-	// 	},
-	// },
-	machineSetControllerDirectiveGenerators []directivesGenerator
+	// maxSurgeBreachToleration can be used to temporarily silence MaxSurge breaches
+	// (see minAvailableBreachToleration example)
+	maxSurgeBreachToleration func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool
 
 	// desiredMachineNames is the list of machines at the end of the rollout.
 	// all the machines in this list are expected to be upToDate and owned by the new MD after the rollout (which is different from the new MD before the rollout).
@@ -124,145 +83,6 @@ type rolloutSequenceTestCase struct {
 
 	// seed value to initialize the generator
 	seed int64
-
-	// F focus on this test (same as FDescribe)
-	F bool
-
-	// TODO: introduce something to simulate errors in the rollout planner (may be, something like currentStateMutators, but it should be run after rolloutRolling)
-	// TODO: dig into what happens when newMS is getting machines both from maxSurge and move (maxSurge>0, minAvailability>0).
-	//   my assumption is that newMS will fist wait for machines from move, then take care of maxSurge
-	//   might be we should give priority to maxSurge instead
-	// TODO: introduce something to simulate when there are machines on multiple MS, and permutation of can updateInPlace choices
-	//  note: this can be achieved already today by changing the md in the middle of a test, let's think if there are easier ways.
-}
-
-var scaleUpTolerationInIteration int
-
-var testCases = []rolloutSequenceTestCase{
-	// Regular rollout (no in-place)
-
-	{ // scale out by 1 (maxSurge 0)
-		F:                   false,
-		name:                "Regular rollout, 3 Replicas, maxSurge 1, MaxUnavailable 0",
-		maxSurge:            1,
-		maxUnavailable:      0,
-		currentMachineNames: []string{"m1", "m2", "m3"},
-		desiredMachineNames: []string{"m4", "m5", "m6"},
-	},
-	{ // scale in by 1 (maxUnavailable 0)
-		F:                   false,
-		name:                "Regular rollout, 3 Replicas, maxSurge 0, MaxUnavailable 1",
-		maxSurge:            0,
-		maxUnavailable:      1,
-		currentMachineNames: []string{"m1", "m2", "m3"},
-		desiredMachineNames: []string{"m4", "m5", "m6"},
-	},
-	{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable)
-		F:                   false,
-		name:                "Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1",
-		maxSurge:            3,
-		maxUnavailable:      1,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
-	},
-	{ // scale out by 1, scale in by 3 (maxSurge < maxUnavailable)
-		F:                   false,
-		name:                "Regular rollout, 6 Replicas, maxSurge 1, MaxUnavailable 3",
-		maxSurge:            1,
-		maxUnavailable:      3,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
-	},
-	{ // scale out by 10 (maxSurge >= replicas)
-		F:                   false,
-		name:                "Regular rollout, 6 Replicas, maxSurge 10, MaxUnavailable 0",
-		maxSurge:            10,
-		maxUnavailable:      0,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
-	},
-	{ // scale in by 10 (maxUnavailable >= replicas)
-		F:                   false,
-		name:                "Regular rollout, 6 Replicas, maxSurge 0, MaxUnavailable 10",
-		maxSurge:            0,
-		maxUnavailable:      10,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
-	},
-	{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable)
-		F:                   false,
-		name:                "Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, scale up to 12",
-		maxSurge:            3,
-		maxUnavailable:      1,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16", "m17", "m18"},
-		currentStateMutators: []stateMutator{
-			func(log *logger, i int, scope *rolloutScope) bool {
-				for _, ms := range scope.machineSets {
-					if ms.Spec.ClusterName != scope.machineDeployment.Spec.ClusterName {
-						continue
-					}
-					if ptr.Deref(scope.machineDeployment.Spec.Replicas, 0) != 12 && ptr.Deref(ms.Status.Replicas, 0) >= 3 {
-						log.Logf("[User] scale up MD to 12 replicas")
-						scope.machineDeployment.Spec.Replicas = ptr.To(int32(12))
-
-						scaleUpTolerationInIteration = i
-						return true
-					}
-					return false
-				}
-				return false
-			},
-		},
-		minAvailableBreachSilencers: []minAvailableBreachSilencer{
-			func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
-				if i >= scaleUpTolerationInIteration {
-					log.Logf("[Toleration] tolerate minAvailable breach after scale up")
-					return true
-				}
-				return false
-			},
-		},
-	},
-
-	// Rollout with In-place updates
-
-	{
-		F:                    false,
-		name:                 "In-place rollout, 3 Replicas, maxSurge 1, MaxUnavailable 0",
-		maxSurge:             1,
-		maxUnavailable:       0,
-		currentMachineNames:  []string{"m1", "m2", "m3"},
-		desiredMachineNames:  []string{"m1", "m2", "m4"},
-		getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
-	},
-	{
-		F:                    false,
-		name:                 "In-place rollout, 3 Replicas, maxSurge 0, MaxUnavailable 1",
-		maxSurge:             0,
-		maxUnavailable:       1,
-		currentMachineNames:  []string{"m1", "m2", "m3"},
-		desiredMachineNames:  []string{"m1", "m2", "m3"},
-		getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
-	},
-	{
-		F:                   false,
-		name:                "In-place rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1",
-		maxSurge:            3,
-		maxUnavailable:      1,
-		currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
-		// desiredMachineNames: []string{"m1", "m2", "m3", "m4", "m7", "m8"}, // V1, planner is not taking full advantage of maxSurge (depending on ms reconcile order)
-		// desiredMachineNames: []string{"m1", "m2", "m3", "m7", "m8", "m9"}, // V2. planner is now taking full advantage of maxSurge; after discussing this, we decide to go in another direction:
-		desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"}, // V3: when in-place is possible, try to do as much as possible machines with in-place, even if this implies "ignoring" maxSurge (maxSurge must still be used when doing regular rollouts)
-		getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
-	},
-
-	// TODO: maxUnavailable > maxSurge
-	// TODO: maxSurge >= replicas
-	// TODO: maxUnavailable >= replicas
-	// TODO: scale up in the middle
-	// TODO: scale down in the middle
-	// TODO: change spec in the middle
 }
 
 func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
@@ -277,61 +97,328 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 	ctx = ctrl.LoggerInto(ctx, logger)
 
 	fileLogger := newLogger(t)
-	for _, tt := range allOrWithF(testCases) {
-		tt.randomControllerOrder = false
-		if tt.logAndGoldenFileName == "" {
-			tt.logAndGoldenFileName = strings.ToLower(tt.name)
-		}
+
+	tests := []rolloutSequenceTestCase{
+		// Regular rollout (no in-place)
+
+		{ // scale out by 1 (maxSurge 0)
+			name:                "Regular rollout, 3 Replicas, maxSurge 1, MaxUnavailable 0",
+			maxSurge:            1,
+			maxUnavailable:      0,
+			currentMachineNames: []string{"m1", "m2", "m3"},
+			desiredMachineNames: []string{"m4", "m5", "m6"},
+		},
+		{ // scale in by 1 (maxUnavailable 0)
+			name:                "Regular rollout, 3 Replicas, maxSurge 0, MaxUnavailable 1",
+			maxSurge:            0,
+			maxUnavailable:      1,
+			currentMachineNames: []string{"m1", "m2", "m3"},
+			desiredMachineNames: []string{"m4", "m5", "m6"},
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable)
+			name:                "Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1",
+			maxSurge:            3,
+			maxUnavailable:      1,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
+		},
+		{ // scale out by 1, scale in by 3 (maxSurge < maxUnavailable)
+			name:                "Regular rollout, 6 Replicas, maxSurge 1, MaxUnavailable 3",
+			maxSurge:            1,
+			maxUnavailable:      3,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
+		},
+		{ // scale out by 10 (maxSurge >= replicas)
+			name:                "Regular rollout, 6 Replicas, maxSurge 10, MaxUnavailable 0",
+			maxSurge:            10,
+			maxUnavailable:      0,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
+		},
+		{ // scale in by 10 (maxUnavailable >= replicas)
+			name:                "Regular rollout, 6 Replicas, maxSurge 0, MaxUnavailable 10",
+			maxSurge:            0,
+			maxUnavailable:      10,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames: []string{"m7", "m8", "m9", "m10", "m11", "m12"},
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + scale up machine deployment in the middle
+			name:           "Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, scale up to 12",
+			maxSurge:       3,
+			maxUnavailable: 1,
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD originally with 6 replica in the middle of a rollout, with 3 machines already created in the newMS and 3 still on the oldMS, and then MD scaled up to 12.
+				machineDeployment: createMD("v2", 12, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 3),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already deleted
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						createM("m7", "ms2", "v2"),
+						createM("m8", "ms2", "v2"),
+						createM("m9", "ms2", "v2"),
+					},
+				},
+				machineUID: 9,
+			},
+			desiredMachineNames:          []string{"m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16", "m17", "m18"},
+			minAvailableBreachToleration: minAvailableBreachToleration(),
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + scale down machine deployment in the middle
+			name:                "Regular rollout, 12 Replicas, maxSurge 3, MaxUnavailable 1, scale up to 6",
+			maxSurge:            3,
+			maxUnavailable:      1,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"},
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD originally with 12 replica in the middle of a rollout, with 3 machines already created in the newMS and 9 still on the oldMS, and then MD scaled down to 6.
+				machineDeployment: createMD("v2", 6, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 9),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already deleted
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+						createM("m7", "ms1", "v1"),
+						createM("m8", "ms1", "v1"),
+						createM("m9", "ms1", "v1"),
+						createM("m10", "ms1", "v1"),
+						createM("m11", "ms1", "v1"),
+						createM("m12", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						createM("m13", "ms2", "v2"),
+						createM("m14", "ms2", "v2"),
+						createM("m15", "ms2", "v2"),
+					},
+				},
+				machineUID: 15,
+			},
+			desiredMachineNames:      []string{"m13", "m14", "m15", "m16", "m17", "m18"},
+			maxSurgeBreachToleration: maxSurgeToleration(),
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + change spec in the middle
+			name:           "Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, change spec",
+			maxSurge:       3,
+			maxUnavailable: 1,
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD with 6 replica in the middle of a rollout, with 3 machines already created in the newMS and 3 still on the oldMS, and then MD spec is changed.
+				machineDeployment: createMD("v3", 6, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 3),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already deleted
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						createM("m7", "ms2", "v2"),
+						createM("m8", "ms2", "v2"),
+						createM("m9", "ms2", "v2"),
+					},
+				},
+				machineUID: 9,
+			},
+			desiredMachineNames: []string{"m10", "m11", "m12", "m13", "m14", "m15"}, // NOTE: Machines created before the spec change are deleted
+		},
+
+		// Rollout with In-place updates
+
+		{ // scale out by 1 (maxSurge 0)
+			name:                 "In-place rollout, 3 Replicas, maxSurge 1, MaxUnavailable 0",
+			maxSurge:             1,
+			maxUnavailable:       0,
+			currentMachineNames:  []string{"m1", "m2", "m3"},
+			desiredMachineNames:  []string{"m1", "m2", "m4"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale in by 1 (maxUnavailable 0)
+			name:                 "In-place rollout, 3 Replicas, maxSurge 0, MaxUnavailable 1",
+			maxSurge:             0,
+			maxUnavailable:       1,
+			currentMachineNames:  []string{"m1", "m2", "m3"},
+			desiredMachineNames:  []string{"m1", "m2", "m3"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable)
+			name:                "In-place rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1",
+			maxSurge:            3,
+			maxUnavailable:      1,
+			currentMachineNames: []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			// desiredMachineNames: []string{"m1", "m2", "m3", "m4", "m7", "m8"}, // V1, planner is not taking full advantage of maxSurge (depending on ms reconcile order)
+			// desiredMachineNames: []string{"m1", "m2", "m3", "m7", "m8", "m9"}, // V2. planner is now taking full advantage of maxSurge; after discussing this, we decide to go in another direction:
+			desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"}, // V3: when in-place is possible, try to do as much as possible machines with in-place, even if this implies "ignoring" maxSurge (maxSurge must still be used when doing regular rollouts)
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 1, scale in by 3 (maxSurge < maxUnavailable)
+			name:                 "In-place rollout, 6 Replicas, maxSurge 1, MaxUnavailable 3",
+			maxSurge:             1,
+			maxUnavailable:       3,
+			currentMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 10 (maxSurge >= replicas)
+			name:                 "In-place rollout, 6 Replicas, maxSurge 10, MaxUnavailable 0",
+			maxSurge:             10,
+			maxUnavailable:       0,
+			currentMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m7"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale in by 10 (maxUnavailable >= replicas)
+			name:                 "In-place rollout, 6 Replicas, maxSurge 0, MaxUnavailable 10",
+			maxSurge:             0,
+			maxUnavailable:       10,
+			currentMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + scale up machine deployment in the middle
+			name:           "In-place rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, scale up to 12",
+			maxSurge:       3,
+			maxUnavailable: 1,
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD originally with 6 replica in the middle of a rollout, with 3 machines already move to the newMS and 3 still on the oldMS, and then MD scaled up to 12.
+				machineDeployment: createMD("v2", 12, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 3),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already moved to ms2
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already updated in place
+						createM("m1", "ms2", "v2"),
+						createM("m2", "ms2", "v2"),
+						createM("m3", "ms2", "v2"),
+					},
+				},
+				machineUID: 6,
+			},
+			desiredMachineNames:          []string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"},
+			minAvailableBreachToleration: minAvailableBreachToleration(),
+			getCanUpdateDecision:         oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + scale down machine deployment in the middle
+			name:           "In-place rollout, 12 Replicas, maxSurge 3, MaxUnavailable 1, scale down to 6",
+			maxSurge:       3,
+			maxUnavailable: 1,
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD originally with 12 replica in the middle of a rollout, with 3 machines already move to the newMS and 9 still on the oldMS, and then MD scaled down to 6.
+				machineDeployment: createMD("v2", 6, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 9),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already moved to ms2
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+						createM("m7", "ms1", "v1"),
+						createM("m8", "ms1", "v1"),
+						createM("m9", "ms1", "v1"),
+						createM("m10", "ms1", "v1"),
+						createM("m11", "ms1", "v1"),
+						createM("m12", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already updated in place
+						createM("m1", "ms2", "v2"),
+						createM("m2", "ms2", "v2"),
+						createM("m3", "ms2", "v2"),
+					},
+				},
+				machineUID: 15,
+			},
+			desiredMachineNames:      []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			maxSurgeBreachToleration: maxSurgeToleration(),
+			getCanUpdateDecision:     oldMSCanAlwaysInPlaceUpdate,
+		},
+		{ // scale out by 3, scale in by 1 (maxSurge > maxUnavailable) + change spec in the middle
+			name:           "In-place rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, change spec",
+			maxSurge:       3,
+			maxUnavailable: 1,
+			currentScope: &rolloutScope{ // Manually providing a scope simulating a MD originally with 6 replica in the middle of a rollout, with 3 machines already move to the newMS and 3 still on the oldMS, and then MD spec is changed.
+				machineDeployment: createMD("v3", 6, 3, 1),
+				machineSets: []*clusterv1.MachineSet{
+					createMS("ms1", "v1", 3),
+					createMS("ms2", "v2", 3),
+				},
+				machineSetMachines: map[string][]*clusterv1.Machine{
+					"ms1": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already moved to ms2
+						createM("m4", "ms1", "v1"),
+						createM("m5", "ms1", "v1"),
+						createM("m6", "ms1", "v1"),
+					},
+					"ms2": []*clusterv1.Machine{
+						// "m1", "m2", "m3" already updated in place
+						createM("m1", "ms2", "v2"),
+						createM("m2", "ms2", "v2"),
+						createM("m3", "ms2", "v2"),
+					},
+				},
+				machineUID: 6,
+			},
+			desiredMachineNames:  []string{"m1", "m2", "m3", "m4", "m5", "m6"},
+			getCanUpdateDecision: oldMSCanAlwaysInPlaceUpdate,
+		},
+	}
+
+	testWithPredictableReconcileOrder := true
+	testWithRandomReconcileOrderFromConstantSeed := true
+	testWithRandomReconcileOrderFromRandomSeed := false
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runTestCase(ctx, t, tt, fileLogger)
-		})
-	}
-}
+			if testWithPredictableReconcileOrder {
+				tt.randomControllerOrder = false
+				if tt.logAndGoldenFileName == "" {
+					tt.logAndGoldenFileName = strings.ToLower(tt.name)
+				}
+				t.Run("default", func(t *testing.T) {
+					runTestCase(ctx, t, tt, fileLogger)
+				})
+			}
 
-func Test_rolloutSequencesWithRandomReconcileOrderFromConstantSeed(t *testing.T) {
-	logOptions := logs.NewOptions()
-	logOptions.Verbosity = logsv1.VerbosityLevel(5)
-	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
-		t.Errorf("Unable to validate and apply log options: %v", err)
-	}
-	logger := klog.Background()
+			if testWithRandomReconcileOrderFromConstantSeed {
+				tt.name = fmt.Sprintf("%s, random(0)", tt.name)
+				tt.randomControllerOrder = true
+				tt.seed = 0
+				if tt.logAndGoldenFileName == "" {
+					tt.logAndGoldenFileName = strings.ToLower(tt.name)
+				}
+				t.Run("random(0)", func(t *testing.T) {
+					runTestCase(ctx, t, tt, fileLogger)
+				})
+			}
 
-	var ctx = context.Background()
-	ctx = ctrl.LoggerInto(ctx, logger)
-
-	fileLogger := newLogger(t)
-	for _, tt := range allOrWithF(testCases) {
-		tt.name = fmt.Sprintf("%s, random(0)", tt.name)
-		tt.randomControllerOrder = true
-		tt.seed = 0
-		if tt.logAndGoldenFileName == "" {
-			tt.logAndGoldenFileName = strings.ToLower(tt.name)
-		}
-		t.Run(tt.name, func(t *testing.T) {
-			runTestCase(ctx, t, tt, fileLogger)
-		})
-	}
-}
-
-func Test_rolloutSequencesWithRandomReconcileOrderFromRandomSeed(t *testing.T) {
-	logOptions := logs.NewOptions()
-	logOptions.Verbosity = logsv1.VerbosityLevel(5)
-	if err := logsv1.ValidateAndApply(logOptions, nil); err != nil {
-		t.Errorf("Unable to validate and apply log options: %v", err)
-	}
-	logger := klog.Background()
-
-	var ctx = context.Background()
-	ctx = ctrl.LoggerInto(ctx, logger)
-
-	fileLogger := newLogger(t)
-	for _, tt := range allOrWithF(testCases) {
-		tt.name = fmt.Sprintf("%s, random(x)", tt.name)
-		tt.randomControllerOrder = true
-		tt.seed = time.Now().UnixNano()
-		tt.skipLogToFileAndGoldenFileCheck = true
-		t.Run(tt.name, func(t *testing.T) {
-			runTestCase(ctx, t, tt, fileLogger)
+			if testWithRandomReconcileOrderFromRandomSeed {
+				tt.name = fmt.Sprintf("%s, random(x)", tt.name)
+				tt.randomControllerOrder = true
+				tt.seed = time.Now().UnixNano()
+				tt.skipLogToFileAndGoldenFileCheck = true
+				t.Run("random(x)", func(t *testing.T) {
+					runTestCase(ctx, t, tt, fileLogger)
+				})
+			}
 		})
 	}
 }
@@ -343,7 +430,10 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 	fileLogger.NewTestCase(tt.name, fmt.Sprintf("resources/%s", tt.logAndGoldenFileName))
 
 	// Init current and desired state from test case
-	current := initCurrentRolloutScope(tt)
+	current := tt.currentScope
+	if current == nil {
+		current = initCurrentRolloutScope(tt)
+	}
 	desired := computeDesiredRolloutScope(current, tt.desiredMachineNames)
 
 	// Log initial state
@@ -354,26 +444,8 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 	}
 	fileLogger.Logf("[Test] Rollout %d replicas, MaxSurge=%d, MaxUnavailable=%d%s\n", len(tt.currentMachineNames), tt.maxSurge, tt.maxUnavailable, random)
 	i := 1
-	maxIterations := 50
+	maxIterations := 100
 	for {
-		// Run scope mutators faking users actions in the middle of a rollout
-		if len(tt.currentStateMutators) > 0 {
-			stateChanged := false
-			for _, mutator := range tt.currentStateMutators {
-				stateChanged = stateChanged || mutator(fileLogger, i, current)
-			}
-			if stateChanged {
-				// update desire state according to the mutated current scope
-				desired = computeDesiredRolloutScope(current, tt.desiredMachineNames)
-			}
-		}
-
-		// Compute directives that can be used to influence the MS controller
-		directives := []string{}
-		for _, generator := range tt.machineSetControllerDirectiveGenerators {
-			directives = append(directives, generator(fileLogger, i, current)...)
-		}
-
 		taskOrder := defaultTaskOrder(current)
 		if tt.randomControllerOrder {
 			taskOrder = randomTaskOrder(current, rng)
@@ -406,11 +478,8 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 				totAvailableReplicas := ptr.Deref(current.machineDeployment.Status.AvailableReplicas, 0)
 				if totAvailableReplicas < minAvailableReplicas {
 					tolerateBreach := false
-					for _, tolerationFunc := range tt.minAvailableBreachSilencers {
-						if tolerationFunc(fileLogger, i, current, minAvailableReplicas, totAvailableReplicas) {
-							tolerateBreach = true
-							break
-						}
+					if tt.minAvailableBreachToleration != nil {
+						tolerateBreach = tt.minAvailableBreachToleration(fileLogger, i, current, minAvailableReplicas, totAvailableReplicas)
 					}
 					if !tolerateBreach {
 						g.Expect(totAvailableReplicas).To(BeNumerically(">=", minAvailableReplicas), "totAvailable machines is less than MinUnavailable")
@@ -422,11 +491,8 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 				totReplicas := mdutil.TotalMachineSetsReplicaSum(current.machineSets)
 				if totReplicas > maxAllowedReplicas {
 					tolerateBreach := false
-					for _, tolerationFunc := range tt.maxSurgeBreachSilencers {
-						if tolerationFunc(fileLogger, i, current, maxAllowedReplicas, totReplicas) {
-							tolerateBreach = true
-							break
-						}
+					if tt.maxSurgeBreachToleration != nil {
+						tolerateBreach = tt.maxSurgeBreachToleration(fileLogger, i, current, maxAllowedReplicas, totReplicas)
 					}
 					if !tolerateBreach {
 						g.Expect(totReplicas).To(BeNumerically("<=", maxAllowedReplicas), "totReplicas machines is greater than MaxSurge")
@@ -438,7 +504,7 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 			for _, ms := range current.machineSets {
 				if fmt.Sprintf("ms%d", taskID) == ms.Name {
 					fileLogger.Logf("[MS controller] Iteration %d, Reconcile ms%d, %s", i, taskID, msLog(ms, current.machineSetMachines[ms.Name]))
-					machineSetControllerMutator(fileLogger, ms, current, directives)
+					machineSetControllerMutator(fileLogger, ms, current)
 					break
 				}
 			}
@@ -467,22 +533,24 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 }
 
 // machineSetControllerMutator fakes a small part of the MachineSet controller, just what is required for the rollout to progress.
-func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutScope, directives []string) {
-	d := sets.NewString(directives...)
-
-	if d.Has(fmt.Sprintf("%s-SKIP-RECONCILE", ms.Name)) {
-		return
-	}
-
+func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *rolloutScope) {
 	// Update counters
+	// Note: this should not be implemented in production code
 	ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
 
-	// FIXME: when implementing in production code, make sure to not start in-place upgrades for machines pending a move Acknowledge
+	// FIXME: when implementing in production code make sure to:
+	//  - detect if there are replicas still pending AcknowledgeMove first, including also handling cleanup of the pendingAcknowledgeMoveAnnotationName on machines
+	//  - when deleting or moving
+	//  	- first move if possible, then delete
+	// 		- move machines should be capped to avoid unnecessary in-place upgrades (in case of scale down in the middle of rollouts); remaining part should be deleted
+	//      - do not move machines pending a move Acknowledge, with an in-place upgrade in progress, deleted or marked for deletion, unhealthy
 
 	// Sort machines to ensure stable results of move/delete operations during tests.
+	// Note: this should not be implemented in production code
 	sortMachineSetMachines(scope.machineSetMachines[ms.Name])
 
 	// Removing updatingInPlaceAnnotation after pendingAcknowledgeMove is gone in a previous reconcile (so inPlaceUpdating lasts one reconcile more)
+	// Note: this should not be implemented in production code
 	replicasEndingInPlaceUpdate := sets.Set[string]{}
 	for _, m := range scope.machineSetMachines[ms.Name] {
 		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; ok {
@@ -580,6 +648,13 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 					return
 				}
 
+				// Limit the number of machines to be moved to avoid to exceed the final number of replicas for the target MS.
+				machinesToMove := min(machinesToDeleteOrMove, ptr.Deref(scope.machineDeployment.Spec.Replicas, 0)-ptr.Deref(targetMS.Spec.Replicas, 0))
+				if machinesToMove != machinesToDeleteOrMove {
+					log.Logf("[MS controller] - Move capped to %d replicas to avoid unnecessary in-place upgrades", machinesToMove)
+				}
+				machinesToDeleteOrMove = machinesToDeleteOrMove - machinesToMove
+
 				validSourceMSs, _ := targetMS.Annotations[acceptReplicasFromAnnotationName]
 				sourcesSet := sets.Set[string]{}
 				sourcesSet.Insert(strings.Split(validSourceMSs, ",")...)
@@ -587,8 +662,6 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 					log.Logf("[MS controller] - PANIC! %s is set to send replicas to %s, but %[2]s only accepts machines from %s", ms.Name, targetMS.Name, validSourceMSs)
 					return
 				}
-
-				// FIXME: when implementing in production code, make sure to not move machines pending a move Acknowledge, with an in-place upgrade in progress, deleted or marked for deletion, unhealthy
 
 				machinesMoved := []string{}
 				machinesSetMachines := []*clusterv1.Machine{}
@@ -599,7 +672,7 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 						continue
 					}
 
-					if int32(len(machinesMoved)) >= machinesToDeleteOrMove {
+					if int32(len(machinesMoved)) >= machinesToMove {
 						machinesSetMachines = append(machinesSetMachines, scope.machineSetMachines[ms.Name][i:]...)
 						break
 					}
@@ -628,26 +701,30 @@ func machineSetControllerMutator(log *logger, ms *clusterv1.MachineSet, scope *r
 				// Note: this is required because can be moved to a target MachineSet reconciled before the source MachineSet (it won't sort machine by itself until the next reconcile).
 				sortMachineSetMachines(scope.machineSetMachines[targetMS.Name])
 			}
-		} else {
-			machinesDeleted := []string{}
-			machinesSetMachines := []*clusterv1.Machine{}
-			for i, m := range scope.machineSetMachines[ms.Name] {
-				if notAcknowledgeMoveReplicas.Has(m.Name) {
-					machinesSetMachines = append(machinesSetMachines, m)
-					continue
-				}
-				if int32(len(machinesDeleted)) >= machinesToDeleteOrMove {
-					machinesSetMachines = append(machinesSetMachines, scope.machineSetMachines[ms.Name][i:]...)
-					break
-				}
-				machinesDeleted = append(machinesDeleted, m.Name)
-			}
-			scope.machineSetMachines[ms.Name] = machinesSetMachines
-			log.Logf("[MS controller] - %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
 		}
 	}
 
+	if machinesToDeleteOrMove > 0 {
+		machinesToDelete := machinesToDeleteOrMove
+		machinesDeleted := []string{}
+		machinesSetMachines := []*clusterv1.Machine{}
+		for i, m := range scope.machineSetMachines[ms.Name] {
+			if notAcknowledgeMoveReplicas.Has(m.Name) {
+				machinesSetMachines = append(machinesSetMachines, m)
+				continue
+			}
+			if int32(len(machinesDeleted)) >= machinesToDelete {
+				machinesSetMachines = append(machinesSetMachines, scope.machineSetMachines[ms.Name][i:]...)
+				break
+			}
+			machinesDeleted = append(machinesDeleted, m.Name)
+		}
+		scope.machineSetMachines[ms.Name] = machinesSetMachines
+		log.Logf("[MS controller] - %s scale down to %d/%[2]d replicas (%s deleted)", ms.Name, ptr.Deref(ms.Spec.Replicas, 0), strings.Join(machinesDeleted, ","))
+	}
+
 	// Update counters
+	// FIXME: this should be implemented in a different way in production code (it depends on how we are going to surface unavailability of machines updating in place).
 	ms.Status.Replicas = ptr.To(int32(len(scope.machineSetMachines[ms.Name])))
 	availableReplicas := int32(0)
 	for _, m := range scope.machineSetMachines[ms.Name] {
@@ -667,7 +744,6 @@ type rolloutScope struct {
 	machineUID int32
 }
 
-// TODO: break this down in InitCurrentRolloutScope and computeDesiredRolloutScope
 // Init creates current state and desired state for rolling out a md from currentMachines to wantMachineNames.
 func initCurrentRolloutScope(tt rolloutSequenceTestCase) (current *rolloutScope) {
 	// create current state, with a MD with
@@ -676,125 +752,91 @@ func initCurrentRolloutScope(tt rolloutSequenceTestCase) (current *rolloutScope)
 	// - spec different from the MachineSets and Machines we are going to create down below (to simulate a change that triggers a rollout, but it is not yet started)
 	mdReplicaCount := int32(len(tt.currentMachineNames))
 	current = &rolloutScope{
-		machineDeployment: &clusterv1.MachineDeployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "md"},
-			Spec: clusterv1.MachineDeploymentSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: "v2",
-				Replicas:    &mdReplicaCount,
-				Rollout: clusterv1.MachineDeploymentRolloutSpec{
-					Strategy: clusterv1.MachineDeploymentRolloutStrategy{
-						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
-						RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
-							MaxSurge:       ptr.To(intstr.FromInt32(tt.maxSurge)),
-							MaxUnavailable: ptr.To(intstr.FromInt32(tt.maxUnavailable)),
-						},
-					},
-				},
-			},
-			Status: clusterv1.MachineDeploymentStatus{
-				Replicas:          &mdReplicaCount,
-				AvailableReplicas: &mdReplicaCount,
-			},
-		},
-	}
-
-	var totMachineSets, totMachines int32
-
-	// if required, add an old MS to current state, with
-	// - replica counters 0 assuming all the machines are at stable state
-	// - outdate spec -- this MS won't be used during the rollout
-	if tt.addAdditionalOldMachineSet {
-		totMachineSets++
-		ms := &clusterv1.MachineSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("ms%d", totMachineSets),
-			},
-			Spec: clusterv1.MachineSetSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: "v0",
-				Replicas:    ptr.To(int32(0)),
-			},
-			Status: clusterv1.MachineSetStatus{
-				Replicas:          ptr.To(int32(0)),
-				AvailableReplicas: ptr.To(int32(0)),
-			},
-		}
-		current.machineSets = append(current.machineSets, ms)
-	}
-
-	// if required, add an old MS to current state, with
-	// - replica counters 0 assuming all the machines are at stable state
-	// - the same spec the MD got after triggering rollout -- this MS must be used during the rollout
-	if tt.addAdditionalOldMachineSetWithNewSpec {
-		totMachineSets++
-		ms := &clusterv1.MachineSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("ms%d", totMachineSets),
-			},
-			Spec: clusterv1.MachineSetSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: current.machineDeployment.Spec.ClusterName,
-				Replicas:    ptr.To(int32(0)),
-			},
-			Status: clusterv1.MachineSetStatus{
-				Replicas:          ptr.To(int32(0)),
-				AvailableReplicas: ptr.To(int32(0)),
-			},
-		}
-		current.machineSets = append(current.machineSets, ms)
+		machineDeployment: createMD("v2", mdReplicaCount, tt.maxSurge, tt.maxUnavailable),
 	}
 
 	// Create current MS, with
 	// - replica counters assuming all the machines are at stable state
 	// - spec at stable state (rollout is not yet propagated to machines)
-	totMachineSets++
-	ms := &clusterv1.MachineSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("ms%d", totMachineSets),
-		},
-		Spec: clusterv1.MachineSetSpec{
-			// Note: using ClusterName to track MD revision and detect MD changes
-			ClusterName: "v1",
-			Replicas:    &mdReplicaCount,
-		},
-		Status: clusterv1.MachineSetStatus{
-			Replicas:          &mdReplicaCount,
-			AvailableReplicas: &mdReplicaCount,
-		},
-	}
+	ms := createMS("ms1", "v1", mdReplicaCount)
 	current.machineSets = append(current.machineSets, ms)
 
 	// Create current Machines, with
 	// - spec at stable state (rollout is not yet propagated to machines)
+	var totMachines int32
 	currentMachines := []*clusterv1.Machine{}
 	for _, machineSetMachineName := range tt.currentMachineNames {
 		totMachines++
-		currentMachines = append(currentMachines, &clusterv1.Machine{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: machineSetMachineName,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: clusterv1.GroupVersion.String(),
-						Kind:       "MachineSet",
-						Name:       ms.Name,
-						Controller: ptr.To(true),
-					},
-				},
-			},
-			Spec: clusterv1.MachineSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: ms.Spec.ClusterName,
-			},
-		})
+		currentMachines = append(currentMachines, createM(machineSetMachineName, ms.Name, ms.Spec.ClusterName))
 	}
 	current.machineSetMachines = map[string][]*clusterv1.Machine{}
 	current.machineSetMachines[ms.Name] = currentMachines
 
-	current.machineDeployment.Spec.Replicas = ptr.To(totMachines) // FIXME(feedback) I assume/hope this is the same as mdReplicaCount
+	current.machineDeployment.Spec.Replicas = ptr.To(mdReplicaCount)
 	current.machineUID = totMachines
 
 	return current
+}
+
+func createMD(spec string, replicas int32, maxSurge, maxUnavailable int32) *clusterv1.MachineDeployment {
+	return &clusterv1.MachineDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "md"},
+		Spec: clusterv1.MachineDeploymentSpec{
+			// Note: using ClusterName to track MD revision and detect MD changes
+			ClusterName: spec,
+			Replicas:    &replicas,
+			Rollout: clusterv1.MachineDeploymentRolloutSpec{
+				Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+					Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+					RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+						MaxSurge:       ptr.To(intstr.FromInt32(maxSurge)),
+						MaxUnavailable: ptr.To(intstr.FromInt32(maxUnavailable)),
+					},
+				},
+			},
+		},
+		Status: clusterv1.MachineDeploymentStatus{
+			Replicas:          &replicas,
+			AvailableReplicas: &replicas,
+		},
+	}
+}
+
+func createMS(name, spec string, replicas int32) *clusterv1.MachineSet {
+	return &clusterv1.MachineSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: clusterv1.MachineSetSpec{
+			// Note: using ClusterName to track MD revision and detect MD changes
+			ClusterName: spec,
+			Replicas:    ptr.To(replicas),
+		},
+		Status: clusterv1.MachineSetStatus{
+			Replicas:          ptr.To(replicas),
+			AvailableReplicas: ptr.To(replicas),
+		},
+	}
+}
+
+func createM(name, ownedByMS, spec string) *clusterv1.Machine {
+	return &clusterv1.Machine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: clusterv1.GroupVersion.String(),
+					Kind:       "MachineSet",
+					Name:       ownedByMS,
+					Controller: ptr.To(true),
+				},
+			},
+		},
+		Spec: clusterv1.MachineSpec{
+			// Note: using ClusterName to track MD revision and detect MD changes
+			ClusterName: spec,
+		},
+	}
 }
 
 func computeDesiredRolloutScope(current *rolloutScope, desiredMachineNames []string) (desired *rolloutScope) {
@@ -837,20 +879,7 @@ func computeDesiredRolloutScope(current *rolloutScope, desiredMachineNames []str
 		newMS.Status.AvailableReplicas = desired.machineDeployment.Status.AvailableReplicas
 	} else {
 		totMachineSets++
-		newMS = &clusterv1.MachineSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: fmt.Sprintf("ms%d", totMachineSets),
-			},
-			Spec: clusterv1.MachineSetSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: desired.machineDeployment.Spec.ClusterName,
-				Replicas:    desired.machineDeployment.Spec.Replicas,
-			},
-			Status: clusterv1.MachineSetStatus{
-				Replicas:          desired.machineDeployment.Spec.Replicas,
-				AvailableReplicas: desired.machineDeployment.Spec.Replicas,
-			},
-		}
+		newMS = createMS(fmt.Sprintf("ms%d", totMachineSets), desired.machineDeployment.Spec.ClusterName, *desired.machineDeployment.Spec.Replicas)
 		desired.machineSets = append(desired.machineSets, newMS)
 	}
 
@@ -859,23 +888,7 @@ func computeDesiredRolloutScope(current *rolloutScope, desiredMachineNames []str
 	desiredMachines := []*clusterv1.Machine{}
 	for _, machineSetMachineName := range desiredMachineNames {
 		totMachines++
-		desiredMachines = append(desiredMachines, &clusterv1.Machine{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: machineSetMachineName,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: clusterv1.GroupVersion.String(),
-						Kind:       "MachineSet",
-						Name:       newMS.Name,
-						Controller: ptr.To(true),
-					},
-				},
-			},
-			Spec: clusterv1.MachineSpec{
-				// Note: using ClusterName to track MD revision and detect MD changes
-				ClusterName: newMS.Spec.ClusterName,
-			},
-		})
+		desiredMachines = append(desiredMachines, createM(machineSetMachineName, newMS.Name, newMS.Spec.ClusterName))
 	}
 	desired.machineSetMachines = map[string][]*clusterv1.Machine{}
 	desired.machineSetMachines[newMS.Name] = desiredMachines
@@ -1062,7 +1075,7 @@ func (l *logger) Logf(format string, args ...interface{}) {
 
 func (l *logger) EndTestCase() (string, string) {
 	os.WriteFile(fmt.Sprintf("%s.test.log", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
-	// os.WriteFile(fmt.Sprintf("%s.test.log.golden", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
+	os.WriteFile(fmt.Sprintf("%s.test.log.golden", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
 
 	currentBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log", l.fileName))
 	current := string(currentBytes)
@@ -1083,6 +1096,20 @@ func sortMachineSetMachines(machines []*clusterv1.Machine) {
 
 func oldMSCanAlwaysInPlaceUpdate(oldMS *clusterv1.MachineSet) bool {
 	return true
+}
+
+func minAvailableBreachToleration() func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+	return func(log *logger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+		log.Logf("[Toleration] tolerate minAvailable breach")
+		return true
+	}
+}
+
+func maxSurgeToleration() func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool {
+	return func(log *logger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool {
+		log.Logf("[Toleration] tolerate maxSurge breach")
+		return true
+	}
 }
 
 // default task order ensure the controllers are run in a consistent and predictable way: md, ms1, ms2 and so on
@@ -1115,17 +1142,4 @@ func randomTaskOrder(current *rolloutScope, rng *rand.Rand) []int {
 		}
 	}
 	return taskOrder
-}
-
-func allOrWithF(testCases []rolloutSequenceTestCase) []rolloutSequenceTestCase {
-	withF := []rolloutSequenceTestCase{}
-	for _, tt := range testCases {
-		if tt.F {
-			withF = append(withF, tt)
-		}
-	}
-	if len(withF) > 0 {
-		return withF
-	}
-	return testCases
 }

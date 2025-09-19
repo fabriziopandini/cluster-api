@@ -1,0 +1,16 @@
+## Regular rollout, 6 Replicas, maxSurge 3, MaxUnavailable 1, change spec, random(0)
+
+[Test] Initial state
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 0/0 replicas ()
+  - ms3, 6/6 replicas (m10,m11,m12,m13,m14,m15)
+[Test] Rollout 0 replicas, MaxSurge=3, MaxUnavailable=1, random(0)
+[MS controller] Iteration 1, Reconcile ms2, 0/0 replicas ()
+[MS controller] Iteration 1, Reconcile ms3, 6/6 replicas (m10,m11,m12,m13,m14,m15)
+[MS controller] Iteration 1, Reconcile ms1, 0/0 replicas ()
+[Test] Final state
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 0/0 replicas ()
+  - ms3, 6/6 replicas (m10,m11,m12,m13,m14,m15)

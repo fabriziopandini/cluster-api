@@ -1,0 +1,21 @@
+## In-place rollout, 12 Replicas, maxSurge 3, MaxUnavailable 1, scale down to 6, random(0)
+
+[Test] Initial state
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 6/6 replicas (m1,m2,m3,m4,m5,m6)
+[Test] Rollout 0 replicas, MaxSurge=3, MaxUnavailable=1, random(0)
+[MS controller] Iteration 1, Reconcile ms2, 6/6 replicas (m1,m2,m3,m4,m5,m6)
+[MD controller] Iteration 1, Reconcile md
+[MD controller] - Input to rollout planner
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 6/6 replicas (m1,m2,m3,m4,m5,m6)
+[MD controller] - Result of rollout planner
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 6/6 replicas (m1,m2,m3,m4,m5,m6)
+[Test] Final state
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 6/6 replicas (m1,m2,m3,m4,m5,m6)
