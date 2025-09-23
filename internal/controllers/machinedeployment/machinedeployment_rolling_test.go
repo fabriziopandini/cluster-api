@@ -414,3 +414,66 @@ func TestReconcileOldMachineSets(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileOldMachineSetsFIXME(t *testing.T) {
+	t.Run("", func(t *testing.T) {
+		g := NewWithT(t)
+
+		machineDeployment := &clusterv1.MachineDeployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "foo",
+				Name:      "bar",
+			},
+			Spec: clusterv1.MachineDeploymentSpec{
+				Rollout: clusterv1.MachineDeploymentRolloutSpec{
+					Strategy: clusterv1.MachineDeploymentRolloutStrategy{
+						Type: clusterv1.RollingUpdateMachineDeploymentStrategyType,
+						RollingUpdate: clusterv1.MachineDeploymentRolloutStrategyRollingUpdate{
+							MaxUnavailable: intOrStrPtr(1),
+							MaxSurge:       intOrStrPtr(3),
+						},
+					},
+				},
+				Replicas: ptr.To[int32](10),
+			},
+		}
+		newMachineSet := &clusterv1.MachineSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "foo",
+				Name:      "bar",
+			},
+			Spec: clusterv1.MachineSetSpec{
+				Replicas: ptr.To[int32](5),
+			},
+			Status: clusterv1.MachineSetStatus{
+				Replicas:          ptr.To[int32](5),
+				AvailableReplicas: ptr.To[int32](4),
+			},
+		}
+		oldMachineSets := []*clusterv1.MachineSet{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "foo",
+					Name:      "8replicas",
+				},
+				Spec: clusterv1.MachineSetSpec{
+					Replicas: ptr.To[int32](6),
+				},
+				Status: clusterv1.MachineSetStatus{
+					Replicas:          ptr.To[int32](6),
+					AvailableReplicas: ptr.To[int32](5),
+				},
+			},
+		}
+		allMachineSets := append(oldMachineSets, newMachineSet)
+
+		r := &Reconciler{
+			Client:   fake.NewClientBuilder().WithObjects(machineDeployment, newMachineSet, oldMachineSets[0]).Build(),
+			recorder: record.NewFakeRecorder(32),
+		}
+
+		err := r.reconcileOldMachineSets(ctx, allMachineSets, oldMachineSets, newMachineSet, machineDeployment)
+		g.Expect(err).To(HaveOccurred())
+
+	})
+}

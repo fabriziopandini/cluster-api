@@ -180,6 +180,9 @@ func (p *rolloutPlanner) reconcileOldMachineSets(ctx context.Context) error {
 	// Check if we can scale down. We can scale down in the following 2 cases:
 	// * Some old MachineSets have unhealthy replicas, we could safely scale down those unhealthy replicas since that won't further
 	//  increase unavailability.
+	// FIXME: this seems wrong.
+	//  When we scale down a MS there is no certainty that the machine that will be actually deleted is one of the unavailable machines.
+	//  It seems more correct if we consider that scale down can always increase unavailability
 	// * New MachineSet has scaled up and it's replicas becomes ready, then we can scale down old MachineSets in a further step.
 	//
 	// maxScaledDown := allMachinesCount - minAvailable - newMachineSetMachinesUnavailable
@@ -230,6 +233,19 @@ func (p *rolloutPlanner) reconcileOldMachineSets(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// FIXME: TLDR; I think there should be a single scale down func, with
+	//  - maxScaledDown computed as availableMachines - scaleDownInProgress - minAvailable
+	//  - sort oldMS from highest unavailableMachines to lowest
+	//  - first pass scaling down from each MS up to unavailable replicas / up to maxScaledDown overall (keeping into account scaleDownInProgress)
+	//  - if there is still room to scale down
+	//    - sort oldMS from oldest to newest (any criteria works here)
+	//    - second pass scaling down from each MS up to replicas / up to maxScaledDown overall (keeping into account scaleDownInProgress)
+
+	// FIXME: deadlock breaker
+	//  I have unavailableMachines only on old MS
+	//  I'm not scaling up or down (both in current and previous reconcile) due to max surge and max unavailability --> stuck
+	// 		Scale down from old MS by one -> break max unavailability to unblock
 
 	log.V(4).Info("Scaled down old MachineSets of MachineDeployment", "count", scaledDownCount)
 	return nil
