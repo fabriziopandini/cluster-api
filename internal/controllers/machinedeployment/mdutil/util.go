@@ -76,6 +76,23 @@ func (o MachineSetsByCreationTimestamp) Less(i, j int) bool {
 	return o[i].CreationTimestamp.Before(&o[j].CreationTimestamp)
 }
 
+// MachineSetsByUnavailableReplicas
+type MachineSetsByUnavailableReplicas []*clusterv1.MachineSet
+
+func (o MachineSetsByUnavailableReplicas) Len() int      { return len(o) }
+func (o MachineSetsByUnavailableReplicas) Swap(i, j int) { o[i], o[j] = o[j], o[i] }
+func (o MachineSetsByUnavailableReplicas) Less(i, j int) bool {
+	iUnavailableReplicas := max(ptr.Deref(o[i].Status.Replicas, 0)-ptr.Deref(o[i].Status.AvailableReplicas, 0), 0)
+	jUnavailableReplicas := max(ptr.Deref(o[j].Status.Replicas, 0)-ptr.Deref(o[j].Status.AvailableReplicas, 0), 0)
+	if iUnavailableReplicas == jUnavailableReplicas {
+		if o[i].CreationTimestamp.Equal(&o[j].CreationTimestamp) {
+			return o[i].Name < o[j].Name
+		}
+		return o[i].CreationTimestamp.Before(&o[j].CreationTimestamp)
+	}
+	return iUnavailableReplicas > jUnavailableReplicas
+}
+
 // MachineSetsBySizeOlder sorts a list of MachineSet by size in descending order, using their creation timestamp or name as a tie breaker.
 // By using the creation timestamp, this sorts from old to new machine sets.
 type MachineSetsBySizeOlder []*clusterv1.MachineSet

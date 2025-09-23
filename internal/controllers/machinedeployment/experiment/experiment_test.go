@@ -81,6 +81,8 @@ type rolloutSequenceTestCase struct {
 	// NOTE. We are using a pseudo randomizer, so the random order remains consistent across runs of the same groups of tests.
 	randomControllerOrder bool
 
+	maxIterations int
+
 	// seed value to initialize the generator
 	seed int64
 }
@@ -385,10 +387,13 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 
 	testWithPredictableReconcileOrder := true
 	testWithRandomReconcileOrderFromConstantSeed := true
-	testWithRandomReconcileOrderFromRandomSeed := false
+	testWithRandomReconcileOrderFromRandomSeed := true
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			name := tt.name
+
 			if testWithPredictableReconcileOrder {
+				tt.maxIterations = 50
 				tt.randomControllerOrder = false
 				if tt.logAndGoldenFileName == "" {
 					tt.logAndGoldenFileName = strings.ToLower(tt.name)
@@ -399,7 +404,8 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 			}
 
 			if testWithRandomReconcileOrderFromConstantSeed {
-				tt.name = fmt.Sprintf("%s, random(0)", tt.name)
+				tt.maxIterations = 70
+				tt.name = fmt.Sprintf("%s, random(0)", name)
 				tt.randomControllerOrder = true
 				tt.seed = 0
 				if tt.logAndGoldenFileName == "" {
@@ -410,14 +416,18 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 				})
 			}
 
-			if testWithRandomReconcileOrderFromRandomSeed {
-				tt.name = fmt.Sprintf("%s, random(x)", tt.name)
-				tt.randomControllerOrder = true
-				tt.seed = time.Now().UnixNano()
-				tt.skipLogToFileAndGoldenFileCheck = true
-				t.Run("random(x)", func(t *testing.T) {
-					runTestCase(ctx, t, tt, fileLogger)
-				})
+			for _ = range 100 {
+				if testWithRandomReconcileOrderFromRandomSeed {
+					tt.maxIterations = 150
+					tt.seed = time.Now().UnixNano()
+					// tt.seed = 1758553736325297000
+					tt.name = fmt.Sprintf("%s, random(%d)", name, tt.seed)
+					tt.randomControllerOrder = true
+					tt.skipLogToFileAndGoldenFileCheck = true
+					t.Run(fmt.Sprintf("random(%d)", tt.seed), func(t *testing.T) {
+						runTestCase(ctx, t, tt, fileLogger)
+					})
+				}
 			}
 		})
 	}
@@ -444,7 +454,7 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 	}
 	fileLogger.Logf("[Test] Rollout %d replicas, MaxSurge=%d, MaxUnavailable=%d%s\n", len(tt.currentMachineNames), tt.maxSurge, tt.maxUnavailable, random)
 	i := 1
-	maxIterations := 100
+	maxIterations := tt.maxIterations
 	for {
 		taskOrder := defaultTaskOrder(current)
 		if tt.randomControllerOrder {
