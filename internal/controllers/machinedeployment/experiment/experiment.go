@@ -55,6 +55,14 @@ func (p *rolloutPlanner) rolloutRolling(ctx context.Context, md *clusterv1.Machi
 		return nil, err
 	}
 
+	// This funcs tries to detect and address the case when a rollout is not making progress because both scaling down and scaling up are blocked.
+	// Note. this func must be called after computing scale up/down intent for all the MachineSets.
+	// Note. this func only address deadlock due to unavailable machines not getting deleted on oldMSs, e.g. due to a wrong configuration.
+	// unblocking deadlock when unavailable machines exists only on oldMSs, is required also because failures on old machines set are not remediated by MHC.
+	if err := p.reconcileDeadlockBreaker(ctx, allMSs, oldMSs, newMS); err != nil {
+		return nil, err
+	}
+
 	// FIXME: change this to do a patch
 	// FIXME: make sure in place annotation are not propagated
 
@@ -101,6 +109,47 @@ func (p *rolloutPlanner) getAllMachineSetsAndSyncRevision(ctx context.Context, m
 	return newMS, oldMSs, nil
 }
 
+// reconcileReplicasPendingAcknowledgeMove adjust the replica count for the newMS after a move operation has been completed.
+// Note: This operation must be performed before computing scale up/down intent for all the MachineSets (so this operation can take into account also moved machines in the current reconcile).
+func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Context, md *clusterv1.MachineDeployment, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, machines []*clusterv1.Machine) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// Cleanup the acknowledgeMove annotation from oldMS to handle the case newMS was different in previous reconcile.
+	// Note: we must preserve acknowledgeMove annotation in the newMS to avoid double accounting of moved replicas.
+	// However, the annotation is recomputed from scratch at every reconcile and overwritten once accounting of moved replicas is completed;
+	// by recomputing the annotation we perform cleanup of replica names after pendingAcknowledgeMove annotation is removed from machine,
+	// as well as cleanup for replicas deleted out of band or other race conditions making the previous list of replica names outdated.
+	for _, oldMS := range oldMSs {
+		delete(oldMS.Annotations, acknowledgeMoveAnnotationName)
+	}
+
+	// Acknowledge replicas after a move operation.
+	// NOTE: pendingMoveAcknowledgeMove annotation from machine (managed by the MS controller) and acknowledgeMove annotation on the newMS (managed by the rollout planner)
+	// are used in combination to ensure moved replicas are counted only once by the rollout planner.
+	oldAcknowledgeMoveReplicas := getAcknowledgeMoveMachines(newMS)
+	newAcknowledgeMoveReplicas := sets.Set[string]{}
+	totNewAcknowledgeMoveReplicasToScaleUp := int32(0)
+	for _, m := range machines {
+		if !util.IsControlledBy(m, newMS, clusterv1.GroupVersion.WithKind("MachineSet").GroupKind()) {
+			continue
+		}
+		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; !ok {
+			continue
+		}
+		if !oldAcknowledgeMoveReplicas.Has(m.Name) {
+			totNewAcknowledgeMoveReplicasToScaleUp++
+		}
+		newAcknowledgeMoveReplicas.Insert(m.Name)
+	}
+	if totNewAcknowledgeMoveReplicasToScaleUp > 0 {
+		replicaCount := min(ptr.Deref(newMS.Spec.Replicas, 0)+totNewAcknowledgeMoveReplicasToScaleUp, ptr.Deref(md.Spec.Replicas, 0))
+		scaleUpCount := replicaCount - ptr.Deref(newMS.Spec.Replicas, 0)
+		newMS.Spec.Replicas = ptr.To(replicaCount)
+		log.V(5).Info(fmt.Sprintf("Acknowledge replicas %s moved from an old MachineSet. Scale up %s to %d (+%d)", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()), newMS.Name, replicaCount, scaleUpCount))
+	}
+	setAcknowledgeMachines(newMS, newAcknowledgeMoveReplicas.UnsortedList()...)
+}
+
 func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context, allMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
 	// FIXME: cleanupDisableMachineCreateAnnotation
 
@@ -145,8 +194,6 @@ func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context, allMSs []*c
 }
 
 func (p *rolloutPlanner) reconcileOldMachineSets(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, md *clusterv1.MachineDeployment) error {
-	log := ctrl.LoggerFrom(ctx)
-
 	if md.Spec.Replicas == nil {
 		return errors.Errorf("spec.replicas for MachineDeployment %v is nil, this is unexpected",
 			client.ObjectKeyFromObject(md))
@@ -157,137 +204,117 @@ func (p *rolloutPlanner) reconcileOldMachineSets(ctx context.Context, allMSs []*
 			client.ObjectKeyFromObject(newMS))
 	}
 
-	// FIXME: short circuit if there are no replicas to scale down.
+	// no op if there are no replicas on old machinesets
+	if mdutil.GetReplicaCountForMachineSets(oldMSs) == 0 {
+		return nil
+	}
 
 	maxUnavailable := mdutil.MaxUnavailable(*md)
-	minAvailable := *(md.Spec.Replicas) - maxUnavailable
+	minAvailable := max(ptr.Deref(md.Spec.Replicas, 0)-maxUnavailable, 0)
+
+	totReplicas := mdutil.GetReplicaCountForMachineSets(allMSs)
 
 	// Find the number of available machines.
-	availableMachineCount := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(allMSs), 0)
+	totAvailableReplicas := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(allMSs), 0)
 
-	// Find the number of pending scale down from previous reconcile/from current reconcile.
-	totPendingAvailableScaleDown := int32(0)
+	// Find the number of pending scale down from previous reconcile/from current reconcile;
+	// This is required because whenever we are reducing the number of replicas, this operation could further impact availability e.g.
+	// - in case of regular rollout, there is no certainty about which machine is going to be deleted (and if this machine is currently available or not):
+	// 	 - e.g. MS controller is going to delete first machines with deletion annotation; also MS controller has a slight different notion of unavailable as of now.
+	// - in case of in-place rollout, in-place upgrade are always assumed as impacting availability (they can always fail).
+	totPendingScaleDown := int32(0)
 	for _, ms := range allMSs {
 		scaleIntent := ptr.Deref(ms.Spec.Replicas, 0)
 		if v, ok := p.scaleIntents[ms.Name]; ok {
 			scaleIntent = min(scaleIntent, v)
 		}
 
-		if scaleIntent < ptr.Deref(ms.Status.AvailableReplicas, 0) {
-			totPendingAvailableScaleDown += max(ptr.Deref(ms.Status.AvailableReplicas, 0)-ptr.Deref(ms.Spec.Replicas, 0), 0)
+		// NOTE: we are counting only pending scale down from the current status.replicas (so scale down of actual machines).
+		if scaleIntent < ptr.Deref(ms.Status.Replicas, 0) {
+			totPendingScaleDown += max(ptr.Deref(ms.Status.Replicas, 0)-scaleIntent, 0)
 		}
 	}
 
-	// Check if we can scale down without (further) breaching min availability; if not, return.
-	totalScaleDownCount := max(availableMachineCount-totPendingAvailableScaleDown-minAvailable, 0)
-	if totalScaleDownCount <= 0 {
-		return nil
-	}
-
-	sort.Sort(mdutil.MachineSetsByUnavailableReplicas(oldMSs))
-	for _, oldMS := range oldMSs {
-		if totalScaleDownCount <= 0 {
-			// No further scaling required.
-			break
-		}
-
-		if ptr.Deref(oldMS.Spec.Replicas, 0) <= 0 {
-			// Cannot scale down this MachineSet.
-			continue
-		}
-
-		// Scale down unhealthy machines.
-		scaleIntent := ptr.Deref(oldMS.Spec.Replicas, 0)
-		if v, ok := p.scaleIntents[oldMS.Name]; ok {
-			scaleIntent = min(scaleIntent, v)
-		}
-		pendingScaleDown := max(ptr.Deref(oldMS.Spec.Replicas, 0)-scaleIntent, 0)
-		maxScaleDown := max(ptr.Deref(oldMS.Status.Replicas, 0)-pendingScaleDown-ptr.Deref(oldMS.Status.AvailableReplicas, 0), 0)
-
-		scaleDown := min(maxScaleDown, totalScaleDownCount)
-		if scaleDown > 0 {
-			newReplicasCount := max(scaleIntent-scaleDown, 0)
-			log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d)", oldMS.Name, newReplicasCount, scaleDown))
-			p.scaleIntents[oldMS.Name] = newReplicasCount
-			totalScaleDownCount = max(totalScaleDownCount-scaleDown, 0)
-		}
-	}
-
+	// Compute the total number of replicas that can be scaled down.
+	// Exit immediately if there is no room for scaling dowm.
+	totalScaleDownCount := max(totReplicas-totPendingScaleDown-minAvailable, 0)
 	if totalScaleDownCount <= 0 {
 		return nil
 	}
 
 	sort.Sort(mdutil.MachineSetsByCreationTimestamp(oldMSs))
-	for _, oldMS := range oldMSs {
-		if totalScaleDownCount <= 0 {
-			// No further scaling required.
-			break
-		}
 
-		if ptr.Deref(oldMS.Spec.Replicas, 0) <= 0 {
-			// Cannot scale down this MachineSet.
-			continue
-		}
+	// Scale down only unavailable replicas / up to residual totalScaleDownCount.
+	// NOTE: we are scaling up unavailable machines first in order to increase chances for the rollout to progress;
+	// however, the MS controller might have different opinion on which machines to scale down.
+	// As a consequence, the scale down operation must continuously assess if reducing the number of replicas
+	// for an older MS could further impact availability under the assumption than any scale down could further impact availability (same as above).
+	// if reducing the number of replicase might lead to breaching minAvailable, scale down extent must be limited accordingly.
+	totalScaleDownCount, totAvailableReplicas = p.scaleDownOldMSs(ctx, oldMSs, totalScaleDownCount, totAvailableReplicas, minAvailable, false)
 
-		// Scale down unhealthy machines.
-		scaleIntent := ptr.Deref(oldMS.Spec.Replicas, 0)
-		if v, ok := p.scaleIntents[oldMS.Name]; ok {
-			scaleIntent = min(scaleIntent, v)
-		}
-		pendingScaleDown := max(ptr.Deref(oldMS.Spec.Replicas, 0)-scaleIntent, 0)
-		maxScaleDown := max(ptr.Deref(oldMS.Spec.Replicas, 0)-pendingScaleDown, 0) // FIXME: what if status.replicas < spec.replicas //  FIXME this line + sort are the only diff between the two scale rounds
-
-		scaleDown := min(maxScaleDown, totalScaleDownCount)
-		if scaleDown > 0 {
-			newReplicasCount := max(scaleIntent-scaleDown, 0)
-			log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d)", oldMS.Name, newReplicasCount, scaleDown))
-			p.scaleIntents[oldMS.Name] = newReplicasCount
-			totalScaleDownCount = max(totalScaleDownCount-scaleDown, 0)
-		}
-	}
+	// Then scale down old MS up to zero replicas / up to residual totalScaleDownCount.
+	// NOTE: also in this case, continuously assess if reducing the number of replicase could further impact availability,
+	// and if necessary, limit scale down extent to ensure the operation respects minAvailable limits.
+	_, _ = p.scaleDownOldMSs(ctx, oldMSs, totalScaleDownCount, totAvailableReplicas, minAvailable, true)
 
 	return nil
 }
 
-// reconcileReplicasPendingAcknowledgeMove adjust the replica count for the newMS after a move operation has been completed.
-// Note: This operation must be performed before computing scale up/down for all the MachineSets (so this operation can take into account also moved machines in the current reconcile).
-func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Context, md *clusterv1.MachineDeployment, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet, machines []*clusterv1.Machine) {
+func (p *rolloutPlanner) scaleDownOldMSs(ctx context.Context, oldMSs []*clusterv1.MachineSet, totalScaleDownCount, totAvailableReplicas, minAvailable int32, scaleToZero bool) (int32, int32) {
 	log := ctrl.LoggerFrom(ctx)
 
-	// Cleanup the acknowledgeMove annotation from oldMS to handle the case newMS was different in previous reconcile.
-	// Note: we must preserve acknowledgeMove annotation in the newMS to avoid double accounting of moved replicas.
-	// However, the annotation is recomputed from scratch at every reconcile and overwritten once accounting of moved replicas is completed;
-	// by recomputing the annotation we perform cleanup of replica names after pendingAcknowledgeMove annotation is removed from machine,
-	// as well as cleanup for replicas deleted out of band or other race conditions making the previous list of replica names outdated.
 	for _, oldMS := range oldMSs {
-		delete(oldMS.Annotations, acknowledgeMoveAnnotationName)
+		// No op if there is no scaling down left.
+		if totalScaleDownCount <= 0 {
+			break
+		}
+
+		// No op if this MS has been already scaled down to zero.
+		scaleIntent := ptr.Deref(oldMS.Spec.Replicas, 0)
+		if v, ok := p.scaleIntents[oldMS.Name]; ok {
+			scaleIntent = min(scaleIntent, v)
+		}
+
+		if scaleIntent <= 0 {
+			continue
+		}
+
+		// Compute the scale down extent by considering either unavailable replicas or, if scaleToZero is set, all replicas.
+		// In both cases, scale down is limited to totalScaleDownCount.
+		maxScaleDown := max(scaleIntent-ptr.Deref(oldMS.Status.AvailableReplicas, 0), 0)
+		if scaleToZero {
+			maxScaleDown = scaleIntent
+		}
+		scaleDown := min(maxScaleDown, totalScaleDownCount)
+
+		// Exit if there is no room for scaling down the MS.
+		if scaleDown == 0 {
+			continue
+		}
+
+		// Before scaling down validate if the operation will lead to a breach to minAvailability
+		// In order to do so, consider how many machines will be actually deleted, and consider this operation as impacting availability;
+		// if the projected state breaches minAvailability, reduce the scale down extend accordingly.
+		availableMachineScaleDown := int32(0)
+		if ptr.Deref(oldMS.Status.AvailableReplicas, 0) > 0 {
+			newScaleIntent := scaleIntent - scaleDown
+			machineScaleDownIntent := max(ptr.Deref(oldMS.Status.Replicas, 0)-newScaleIntent, 0)
+			if totAvailableReplicas-machineScaleDownIntent < minAvailable {
+				availableMachineScaleDown = max(totAvailableReplicas-minAvailable, 0)
+				scaleDown = scaleDown - machineScaleDownIntent + availableMachineScaleDown
+			}
+		}
+
+		if scaleDown > 0 {
+			newScaleIntent := max(scaleIntent-scaleDown, 0)
+			log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d)", oldMS.Name, newScaleIntent, scaleDown))
+			p.scaleIntents[oldMS.Name] = newScaleIntent
+			totalScaleDownCount = max(totalScaleDownCount-scaleDown, 0)
+			totAvailableReplicas = max(totAvailableReplicas-availableMachineScaleDown, 0)
+		}
 	}
 
-	// Acknowledge replicas after a move operation.
-	// NOTE: pendingMoveAcknowledgeMove annotation from machine (managed by the MS controller) and acknowledgeMove annotation on the newMS (managed by the rollout planner)
-	// are used in combination to ensure moved replicas are counted only once by the rollout planner.
-	oldAcknowledgeMoveReplicas := getAcknowledgeMoveMachines(newMS)
-	newAcknowledgeMoveReplicas := sets.Set[string]{}
-	totNewAcknowledgeMoveReplicasToScaleUp := int32(0)
-	for _, m := range machines {
-		if !util.IsControlledBy(m, newMS, clusterv1.GroupVersion.WithKind("MachineSet").GroupKind()) {
-			continue
-		}
-		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; !ok {
-			continue
-		}
-		if !oldAcknowledgeMoveReplicas.Has(m.Name) {
-			totNewAcknowledgeMoveReplicasToScaleUp++
-		}
-		newAcknowledgeMoveReplicas.Insert(m.Name)
-	}
-	if totNewAcknowledgeMoveReplicasToScaleUp > 0 {
-		replicaCount := min(ptr.Deref(newMS.Spec.Replicas, 0)+totNewAcknowledgeMoveReplicasToScaleUp, ptr.Deref(md.Spec.Replicas, 0))
-		scaleUpCount := replicaCount - ptr.Deref(newMS.Spec.Replicas, 0)
-		newMS.Spec.Replicas = ptr.To(replicaCount)
-		log.V(5).Info(fmt.Sprintf("Acknowledge replicas %s moved from an old MachineSet. Scale up %s to %d (+%d)", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()), newMS.Name, replicaCount, scaleUpCount))
-	}
-	setAcknowledgeMachines(newMS, newAcknowledgeMoveReplicas.UnsortedList()...)
+	return totalScaleDownCount, totAvailableReplicas
 }
 
 // reconcileInPlaceUpdateIntent ensures CAPI rollouts changes by performing in-place updates whenever possible.
@@ -439,6 +466,64 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context, allMS
 
 	// FIXME(feedback) Let's talk about old/new MS controller race conditions
 	//  * Wondering about scenarios where the move & accept annotations on MSs change over time and MS controllers might still act on the old annotations
+	return nil
+}
+
+// This funcs tries to detect and address the case when a rollout is not making progress because both scaling down and scaling up are blocked.
+// Note. this func must be called after computing scale up/down intent for all the MachineSets.
+// Note. this func only address deadlock due to unavailable machines not getting deleted on oldMSs, e.g. due to a wrong configuration.
+// unblocking deadlock when unavailable machines exists only on oldMSs, is required also because failures on old machines set are not remediated by MHC.
+func (p *rolloutPlanner) reconcileDeadlockBreaker(ctx context.Context, allMSs []*clusterv1.MachineSet, oldMSs []*clusterv1.MachineSet, newMS *clusterv1.MachineSet) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	// if there are no replicas on the old MS, rollout is completed, no deadlock (actually no rollout in progress).
+	if ptr.Deref(mdutil.GetActualReplicaCountForMachineSets(oldMSs), 0) == 0 {
+		return nil
+	}
+
+	// if all the replicas on OldMS are available, no deadlock (regular scale up newMS and scale down oldMS should take over from here).
+	if ptr.Deref(mdutil.GetActualReplicaCountForMachineSets(oldMSs), 0) == ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(oldMSs), 0) {
+		return nil
+	}
+
+	// if there are scale operation in progress, no deadlock.
+	// Note: we are considering both scale operation from previous and current reconcile.
+	// Note: we are counting only pending scale up & down from the current status.replicas (so actual scale up & down of replicas number, not any other possible "re-alignment" of spec.replicas).
+	for _, ms := range allMSs {
+		scaleIntent := ptr.Deref(ms.Spec.Replicas, 0)
+		if v, ok := p.scaleIntents[ms.Name]; ok {
+			scaleIntent = v
+		}
+		if scaleIntent != ptr.Deref(ms.Status.Replicas, 0) {
+			return nil
+		}
+	}
+
+	// if there are unavailable replicas on the newMS, wait for them to become available first.
+	// Note: a rollout cannot be unblocked if new machines do not become available.
+	// Note: if the replicas on the newMS are not going to become available for any issue either:
+	// - automatic remediation can help in addressing temporary failures.
+	// - user intervention is required to fix more permanent issues e.g. to fix a wrong configuration.
+	if ptr.Deref(newMS.Status.AvailableReplicas, 0) != ptr.Deref(newMS.Status.Replicas, 0) {
+		return nil
+	}
+
+	// At this point we can assume there is a deadlock that can be remediated by breaching maxUnavailability constraint
+	// and scaling down an oldMS with unavailable machines by one.
+	//
+	// Note: in most cases this is only a formal violation of maxUnavailability, because there is a good changes
+	// that the machine that will be deleted is one of the unavailable machines
+	for _, oldMS := range oldMSs {
+		if ptr.Deref(oldMS.Status.AvailableReplicas, 0) == ptr.Deref(oldMS.Status.Replicas, 0) || ptr.Deref(oldMS.Spec.Replicas, 0) == 0 {
+			continue
+		}
+
+		newScaleIntent := max(ptr.Deref(oldMS.Spec.Replicas, 0)-1, 0)
+		log.V(5).Info(fmt.Sprintf("Setting scale down intent for %s to %d replicas (-%d) to unblock rollout stuck due to unavailable machine on oldMS only", oldMS.Name, newScaleIntent, 1))
+		p.scaleIntents[oldMS.Name] = newScaleIntent
+		return nil
+	}
+
 	return nil
 }
 
