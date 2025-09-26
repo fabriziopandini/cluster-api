@@ -146,13 +146,13 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already deleted
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
 						createM("m6", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						createM("m7", "ms2", "v2"),
 						createM("m8", "ms2", "v2"),
 						createM("m9", "ms2", "v2"),
@@ -175,7 +175,7 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already deleted
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
@@ -187,7 +187,7 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 						createM("m11", "ms1", "v1"),
 						createM("m12", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						createM("m13", "ms2", "v2"),
 						createM("m14", "ms2", "v2"),
 						createM("m15", "ms2", "v2"),
@@ -209,13 +209,13 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already deleted
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
 						createM("m6", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						createM("m7", "ms2", "v2"),
 						createM("m8", "ms2", "v2"),
 						createM("m9", "ms2", "v2"),
@@ -289,13 +289,13 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already moved to ms2
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
 						createM("m6", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						// "m1", "m2", "m3" already updated in place
 						createM("m1", "ms2", "v2"),
 						createM("m2", "ms2", "v2"),
@@ -319,7 +319,7 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already moved to ms2
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
@@ -331,7 +331,7 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 						createM("m11", "ms1", "v1"),
 						createM("m12", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						// "m1", "m2", "m3" already updated in place
 						createM("m1", "ms2", "v2"),
 						createM("m2", "ms2", "v2"),
@@ -355,13 +355,13 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 					createMS("ms2", "v2", 3),
 				},
 				machineSetMachines: map[string][]*clusterv1.Machine{
-					"ms1": []*clusterv1.Machine{
+					"ms1": {
 						// "m1", "m2", "m3" already moved to ms2
 						createM("m4", "ms1", "v1"),
 						createM("m5", "ms1", "v1"),
 						createM("m6", "ms1", "v1"),
 					},
-					"ms2": []*clusterv1.Machine{
+					"ms2": {
 						// "m1", "m2", "m3" already updated in place
 						createM("m1", "ms2", "v2"),
 						createM("m2", "ms2", "v2"),
@@ -406,11 +406,10 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 				})
 			}
 
-			for _ = range 100 {
-				if testWithRandomReconcileOrderFromRandomSeed {
+			if testWithRandomReconcileOrderFromRandomSeed {
+				for range 100 {
 					tt.maxIterations = 150
 					tt.seed = time.Now().UnixNano()
-					// tt.seed = 1758553736325297000
 					tt.name = fmt.Sprintf("%s, random(%d)", name, tt.seed)
 					tt.randomControllerOrder = true
 					tt.skipLogToFileAndGoldenFileCheck = true
@@ -424,9 +423,10 @@ func Test_rolloutSequencesWithPredictableReconcileOrder(t *testing.T) {
 }
 
 func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, fileLogger *fileLogger) {
+	t.Helper()
 	g := NewWithT(t)
 
-	rng := rand.New(rand.NewSource(tt.seed))
+	rng := rand.New(rand.NewSource(tt.seed)) //nolint:gosec // it is ok to use a weak randomizer here
 	fileLogger.NewTestCase(tt.name, fmt.Sprintf("resources/%s", tt.logAndGoldenFileName))
 
 	// Init current and desired state from test case
@@ -526,7 +526,8 @@ func runTestCase(ctx context.Context, t *testing.T, tt rolloutSequenceTestCase, 
 	}
 
 	if !tt.skipLogToFileAndGoldenFileCheck {
-		currentLog, goldenLog := fileLogger.EndTestCase()
+		currentLog, goldenLog, err := fileLogger.EndTestCase()
+		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(currentLog).To(Equal(goldenLog), "current test case log and golden test case log are different\n%s", cmp.Diff(currentLog, goldenLog))
 	}
 }
@@ -652,9 +653,9 @@ func machineSetControllerMutator(log *fileLogger, ms *clusterv1.MachineSet, scop
 				if machinesToMove != machinesToDeleteOrMove {
 					log.Logf("[MS controller] - Move capped to %d replicas to avoid unnecessary in-place upgrades", machinesToMove)
 				}
-				machinesToDeleteOrMove = machinesToDeleteOrMove - machinesToMove
+				machinesToDeleteOrMove -= machinesToMove
 
-				validSourceMSs, _ := targetMS.Annotations[acceptReplicasFromAnnotationName]
+				validSourceMSs := targetMS.Annotations[acceptReplicasFromAnnotationName]
 				sourcesSet := sets.Set[string]{}
 				sourcesSet.Insert(strings.Split(validSourceMSs, ",")...)
 				if !sourcesSet.Has(ms.Name) {
@@ -857,10 +858,10 @@ func msLog(ms *clusterv1.MachineSet, machines []*clusterv1.Machine) string {
 	for _, m := range machines {
 		name := m.Name
 		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; ok && !acknowledgeMoveMachines.Has(name) {
-			name = name + "🟠"
+			name += "🟠"
 		}
 		if _, ok := m.Annotations[updatingInPlaceAnnotationName]; ok {
-			name = name + "🟡"
+			name += "🟡"
 		}
 		machineNames = append(machineNames, name)
 	}
@@ -878,9 +879,7 @@ func msLog(ms *clusterv1.MachineSet, machines []*clusterv1.Machine) string {
 func (r rolloutScope) machines() []*clusterv1.Machine {
 	machines := []*clusterv1.Machine{}
 	for _, ms := range r.machineSets {
-		for _, m := range r.machineSetMachines[ms.Name] {
-			machines = append(machines, m)
-		}
+		machines = append(machines, r.machineSetMachines[ms.Name]...)
 	}
 	return machines
 }
@@ -979,6 +978,7 @@ type fileLogger struct {
 }
 
 func newFileLogger(t *testing.T) *fileLogger {
+	t.Helper()
 	return &fileLogger{t: t, testCaseStringBuilder: strings.Builder{}}
 }
 
@@ -1011,9 +1011,13 @@ func (l *fileLogger) Logf(format string, args ...interface{}) {
 	l.testCaseStringBuilder.WriteString(sb.String())
 }
 
-func (l *fileLogger) EndTestCase() (string, string) {
-	os.WriteFile(fmt.Sprintf("%s.test.log", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
-	os.WriteFile(fmt.Sprintf("%s.test.log.golden", l.fileName), []byte(l.testCaseStringBuilder.String()), 0666)
+func (l *fileLogger) EndTestCase() (string, string, error) {
+	if err := os.WriteFile(fmt.Sprintf("%s.test.log", l.fileName), []byte(l.testCaseStringBuilder.String()), 0600); err != nil {
+		return "", "", err
+	}
+	if err := os.WriteFile(fmt.Sprintf("%s.test.log.golden", l.fileName), []byte(l.testCaseStringBuilder.String()), 0600); err != nil {
+		return "", "", err
+	}
 
 	currentBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log", l.fileName))
 	current := string(currentBytes)
@@ -1021,7 +1025,7 @@ func (l *fileLogger) EndTestCase() (string, string) {
 	goldenBytes, _ := os.ReadFile(fmt.Sprintf("%s.test.log.golden", l.fileName))
 	golden := string(goldenBytes)
 
-	return current, golden
+	return current, golden, nil
 }
 
 func sortMachineSetMachines(machines []*clusterv1.Machine) {
@@ -1032,25 +1036,25 @@ func sortMachineSetMachines(machines []*clusterv1.Machine) {
 	})
 }
 
-func oldMSCanAlwaysInPlaceUpdate(oldMS *clusterv1.MachineSet) bool {
+func oldMSCanAlwaysInPlaceUpdate(_ *clusterv1.MachineSet) bool {
 	return true
 }
 
-func minAvailableBreachToleration() func(log *fileLogger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
-	return func(log *fileLogger, i int, scope *rolloutScope, minAvailableReplicas, totAvailableReplicas int32) bool {
+func minAvailableBreachToleration() func(log *fileLogger, _ int, _ *rolloutScope, _, _ int32) bool {
+	return func(log *fileLogger, _ int, _ *rolloutScope, _, _ int32) bool {
 		log.Logf("[Toleration] tolerate minAvailable breach")
 		return true
 	}
 }
 
-func maxSurgeToleration() func(log *fileLogger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool {
-	return func(log *fileLogger, i int, scope *rolloutScope, maxAllowedReplicas, totReplicas int32) bool {
+func maxSurgeToleration() func(log *fileLogger, _ int, _ *rolloutScope, _, _ int32) bool {
+	return func(log *fileLogger, _ int, _ *rolloutScope, _, _ int32) bool {
 		log.Logf("[Toleration] tolerate maxSurge breach")
 		return true
 	}
 }
 
-// default task order ensure the controllers are run in a consistent and predictable way: md, ms1, ms2 and so on
+// default task order ensure the controllers are run in a consistent and predictable way: md, ms1, ms2 and so on.
 func defaultTaskOrder(current *rolloutScope) []int {
 	taskOrder := []int{}
 	for t := range len(current.machineSets) + 1 + 1 { // +1 is for the MachineSet that might be created when reconciling md, +1 is for the md itself
