@@ -278,7 +278,7 @@ func Test_reconcileOldMachineSets(t *testing.T) {
 			p := &rolloutPlanner{
 				scaleIntents: tt.scaleIntent,
 			}
-			err := p.reconcileOldMachineSets(ctx, append(tt.oldMSs, tt.newMS), tt.oldMSs, tt.newMS, tt.md)
+			err := p.reconcileOldMachineSets(ctx, tt.md, tt.newMS, tt.oldMSs)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(p.scaleIntents).To(Equal(tt.expectScaleIntent), "unexpected scaleIntents")
 
@@ -419,8 +419,7 @@ func Test_reconcileDeadlockBreaker(t *testing.T) {
 			p := &rolloutPlanner{
 				scaleIntents: tt.scaleIntent,
 			}
-			err := p.reconcileDeadlockBreaker(ctx, append(tt.oldMSs, tt.newMS), tt.oldMSs, tt.newMS)
-			g.Expect(err).ToNot(HaveOccurred())
+			p.reconcileDeadlockBreaker(ctx, tt.newMS, tt.oldMSs)
 			g.Expect(p.scaleIntents).To(Equal(tt.expectScaleIntent), "unexpected scaleIntents")
 		})
 	}
