@@ -1,0 +1,53 @@
+## 6 Replicas, maxUserUnavailable 1, change spec
+
+[Test] Initial state
+  md, 6/6 replicas
+  - ms1, 3/3 replicas (m4,m5,m6)
+  - ms2, 3/3 replicas (m7,m8,m9)
+  - ms3, 0/0 replicas ()
+[Test] Rollout 6 replicas, onDeleteStrategy
+[MD controller] Iteration 1, Reconcile md
+[MD controller] - Input to rollout planner
+  md, 6/6 replicas
+  - ms1, 3/3 replicas (m4,m5,m6)
+  - ms2, 3/3 replicas (m7,m8,m9)
+  - ms3, 0/0 replicas ()
+[MD controller] - Result of rollout planner
+  md, 6/6 replicas
+  - ms1, 3/0 replicas (m4,m5,m6)
+  - ms2, 3/3 replicas (m7,m8,m9)
+  - ms3, 0/3 replicas ()
+[MS controller] Iteration 1, Reconcile ms1, 3/0 replicas (m4,m5,m6)
+[MS controller] - ms1 scale down to 0/0 replicas (m4,m5,m6 deleted)
+[MS controller] Iteration 1, Reconcile ms2, 3/3 replicas (m7,m8,m9)
+[MS controller] Iteration 1, Reconcile ms3, 0/3 replicas ()
+[MS controller] - ms3 scale up to 3/3 replicas (m10,m11,m12 created)
+[User] Iteration 1, Deleting machine m7
+[M controller] Iteration 1, Reconcile m7
+[M controller] - m7 finalizer removed
+[M controller] Iteration 1, Reconcile m8
+[M controller] Iteration 1, Reconcile m9
+[MD controller] Iteration 2, Reconcile md
+[MD controller] - Input to rollout planner
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 3/3 replicas (m8,m9)
+  - ms3, 3/3 replicas (m10,m11,m12)
+[MD controller] - Result of rollout planner
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 3/0 replicas (m8,m9)
+  - ms3, 3/6 replicas (m10,m11,m12)
+[MS controller] Iteration 2, Reconcile ms1, 0/0 replicas ()
+[MS controller] Iteration 2, Reconcile ms2, 3/0 replicas (m8,m9)
+[MS controller] - ms2 scale down to 0/0 replicas (m8,m9 deleted)
+[MS controller] Iteration 2, Reconcile ms3, 3/6 replicas (m10,m11,m12)
+[MS controller] - ms3 scale up to 6/6 replicas (m13,m14,m15 created)
+[M controller] Iteration 2, Reconcile m10
+[M controller] Iteration 2, Reconcile m11
+[M controller] Iteration 2, Reconcile m12
+[Test] Final state
+  md, 6/6 replicas
+  - ms1, 0/0 replicas ()
+  - ms2, 0/0 replicas ()
+  - ms3, 6/6 replicas (m10,m11,m12,m13,m14,m15)

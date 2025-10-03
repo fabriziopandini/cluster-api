@@ -116,6 +116,7 @@ func Patch(ctx context.Context, c client.Client, fieldManager string, modified c
 	modified.GetObjectKind().SetGroupVersionKind(gvk)
 
 	if options.WithCachingProxy {
+		// FIXME: check with Stefan > it seems that for every change are making two SSA call (the first changes resource version but it is not cached, the second does not change it, and it is cached)
 		// If the SSA call did not update the object, add the request to the cache.
 		if options.Original.GetResourceVersion() == modifiedUnstructured.GetResourceVersion() {
 			options.Cache.Add(requestIdentifier)

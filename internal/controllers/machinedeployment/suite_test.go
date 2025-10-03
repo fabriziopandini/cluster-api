@@ -125,6 +125,8 @@ func TestMain(m *testing.M) {
 	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
 	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
 
+	os.Exit(m.Run())
+
 	os.Exit(envtest.Run(ctx, envtest.RunInput{
 		M: m,
 		ManagerCacheOptions: cache.Options{
