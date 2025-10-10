@@ -20,8 +20,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -29,11 +31,13 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/internal/controllers/machinedeployment/mdutil"
+	"sigs.k8s.io/cluster-api/util"
 )
 
 // rolloutRollingUpdate reconcile machine sets controlled by a MachineDeployment that is using the RolloutUpdate strategy.
 func (r *Reconciler) rolloutRollingUpdate(ctx context.Context, md *clusterv1.MachineDeployment, msList []*clusterv1.MachineSet, templateExists bool) error {
 	planner := newRolloutPlanner()
+	// FIXME: pass machines
 	if err := planner.init(ctx, md, msList, nil, true, templateExists); err != nil {
 		return err
 	}
@@ -80,6 +84,9 @@ func (p *rolloutPlanner) planRollingUpdate(ctx context.Context) error {
 		}
 	}
 
+	// Adjust the replica count for the newMS after a move operation has been completed.
+	p.reconcileReplicasPendingAcknowledgeMove(ctx)
+
 	// Scale up, if we can.
 	if err := p.reconcileNewMachineSet(ctx); err != nil {
 		return err
@@ -87,6 +94,11 @@ func (p *rolloutPlanner) planRollingUpdate(ctx context.Context) error {
 
 	// Scale down, if we can.
 	if err := p.reconcileOldMachineSetsRollingUpdate(ctx); err != nil {
+		return err
+	}
+
+	// Ensures CAPI rollouts changes by performing in-place updates whenever possible.
+	if err := p.reconcileInPlaceUpdateIntent(ctx); err != nil {
 		return err
 	}
 
@@ -106,6 +118,55 @@ func (p *rolloutPlanner) planRollingUpdate(ctx context.Context) error {
 	// Note: Unblocking deadlocks when unavailable replicas exist only on oldMSs, is required also because replicas on oldMSs are not remediated by MHC.
 	p.reconcileDeadlockBreaker(ctx)
 	return nil
+}
+
+// reconcileReplicasPendingAcknowledgeMove adjust the replica count for the newMS after a move operation has been completed.
+// Note: This operation must be performed before computing scale up/down intent for all the MachineSets (so this operation can take into account also moved machines in the current reconcile).
+func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Context) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// Acknowledge replicas after a move operation.
+	// NOTE: pendingMoveAcknowledgeMove annotation from machine (managed by the MS controller) and acknowledgeMove annotation on the newMS (managed by the rollout planner)
+	// are used in combination to ensure moved replicas are counted only once by the rollout planner.
+	oldAcknowledgeMoveReplicas := sets.Set[string]{}
+	if originalMS, ok := p.originalMS[p.newMS.Name]; ok {
+		if replicaNames, ok := originalMS.Annotations[acknowledgeMoveAnnotationName]; ok && replicaNames != "" {
+			oldAcknowledgeMoveReplicas.Insert(strings.Split(replicaNames, ",")...)
+		}
+	}
+	newAcknowledgeMoveReplicas := sets.Set[string]{}
+	totNewAcknowledgeMoveReplicasToScaleUp := int32(0)
+	for _, m := range p.machines {
+		if !util.IsControlledBy(m, p.newMS, clusterv1.GroupVersion.WithKind("MachineSet").GroupKind()) {
+			continue
+		}
+		if _, ok := m.Annotations[pendingAcknowledgeMoveAnnotationName]; !ok {
+			continue
+		}
+		if !oldAcknowledgeMoveReplicas.Has(m.Name) {
+			totNewAcknowledgeMoveReplicasToScaleUp++
+		}
+		newAcknowledgeMoveReplicas.Insert(m.Name)
+	}
+	if totNewAcknowledgeMoveReplicasToScaleUp > 0 {
+		replicaCount := min(ptr.Deref(p.newMS.Spec.Replicas, 0)+totNewAcknowledgeMoveReplicasToScaleUp, ptr.Deref(p.md.Spec.Replicas, 0))
+		scaleUpCount := replicaCount - ptr.Deref(p.newMS.Spec.Replicas, 0)
+		// FIXME: check that we apply changes to replica not stored as intent!
+		p.newMS.Spec.Replicas = ptr.To(replicaCount)
+		log.V(5).Info(fmt.Sprintf("Acknowledge replicas %s moved from an old MachineSet. Scale up MachineSet %s to %d (+%d)", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()), p.newMS.Name, replicaCount, scaleUpCount), "MachineSet", klog.KObj(p.newMS))
+	}
+
+	// Track the list or replicas for which acknowledgeMove is not yet completed;
+	// The MachineSetController will use this info to cleanup the pendingMoveAcknowledgeMove annotation on machines.
+	// NOTE: cleanup of the acknowledgeMove annotation will happen automatically as soon as the rollout planner stops
+	// to set it, because this annotation is not part of the output of computeDesiredMS
+	// (same applies to oldMS, so annotation will always be removed from oldMS).
+	if p.newMS.Annotations == nil {
+		p.newMS.Annotations = map[string]string{}
+	}
+	if newAcknowledgeMoveReplicas.Len() > 0 {
+		p.newMS.Annotations[acknowledgeMoveAnnotationName] = sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList())
+	}
 }
 
 func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context) error {
@@ -308,6 +369,167 @@ func (p *rolloutPlanner) scaleDownOldMSs(ctx context.Context, totalScaleDownCoun
 	return totalScaleDownCount, totalAvailableReplicas
 }
 
+// reconcileInPlaceUpdateIntent ensures CAPI rollouts changes by performing in-place updates whenever possible.
+//
+// When calling this func, new and old MS already have their scale intent, which was computed under the assumption that
+// rollout is going to happen by delete/re-create, and thus it will impact availability.
+//
+// Also in place updates are assumed to impact availability, even if the in place update technically is not impacting workloads,
+// the system must account for scenarios when the operation fails, leading to remediation of the machine/unavailability.
+//
+// As a consequence:
+//   - this function can rely on scale intent previously computed, and just influence how rollout is performed.
+//   - unless the user accounts for this unavailability by setting MaxUnavailable >= 1,
+//     rollout with in-place will create one additional machine to ensure MaxUnavailable == 0 is respected.
+//
+// NOTE: if an in-place upgrade is possible and maxSurge is >= 1, creation of additional machines due to maxSurge is capped to 1 or entirely dropped.
+// Instead, creation of new machines due to scale up goes through as usual.
+func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+	allMSs := append(p.oldMSs, p.newMS)
+
+	// If new MS already has all desired replicas, it does not make sense to perform in-place updates
+	// (existing replicas should be deleted).
+	if ptr.Deref(p.newMS.Spec.Replicas, 0) >= ptr.Deref(p.md.Spec.Replicas, 0) {
+		return nil
+	}
+
+	// Find if there are oldMSs for which it possible to perform an in-place update
+	inPlaceUpdateCandidates := sets.Set[string]{}
+	for _, oldMS := range p.oldMSs {
+		// If the oldMS doesn't have replicas anymore, nothing left to do
+		if ptr.Deref(oldMS.Status.Replicas, 0) <= 0 {
+			continue
+		}
+
+		// If the oldMS is not eligible for in place updates, move to next.
+		if result, ok := p.oldMSNotUpToDateResults[oldMS.Name]; !ok || !result.EligibleForInPlaceUpdate {
+			continue
+		}
+
+		canUpdateDecision := p.getCanUpdateDecision(oldMS)
+		log.V(5).Info(fmt.Sprintf("CanUpdate decision for MachineSet %s: %t", oldMS.Name, canUpdateDecision), "MachineSet", klog.KObj(p.newMS))
+
+		// drop the candidate if it can't update in place
+		if !canUpdateDecision {
+			continue
+		}
+
+		// Set the annotation tracking that the old MS must move machines to the new MS instead of deleting them.
+		// Note: After move is completed, the new MS will take care of the in-place upgrade process.
+		// NOTE: Cleanup of the scaleDownMovingToAnnotationName annotation will happen automatically as soon as the rollout planner stops
+		// to set it, because this annotation is not part of the output of computeDesiredMS
+		// (same applies to newMS, so annotation will always be removed from newMS).
+		if oldMS.Annotations == nil {
+			oldMS.Annotations = map[string]string{}
+		}
+		oldMS.Annotations[scaleDownMovingToAnnotationName] = p.newMS.Name
+		inPlaceUpdateCandidates.Insert(oldMS.Name)
+	}
+
+	// If there are no inPlaceUpdateCandidates, nothing left to do.
+	if inPlaceUpdateCandidates.Len() <= 0 {
+		return nil
+	}
+
+	// Track that the newMS must accept move from in-place candidates. thus allowing a two-ways check before the move operation:
+	// 	"oldMS must have: move to newMS" and "newMS must have: accept replicas from oldMS"
+	// NOTE: Cleanup of the acceptReplicasFromAnnotationName annotation will happen automatically as soon as the rollout planner stops
+	// to set it, because this annotation is not part of the output of computeDesiredMS
+	// (same applies to oldMS, so annotation will always be removed from oldMS).
+	if p.newMS.Annotations == nil {
+		p.newMS.Annotations = map[string]string{}
+	}
+	p.newMS.Annotations[acceptReplicasFromAnnotationName] = sortAndJoin(inPlaceUpdateCandidates.UnsortedList())
+
+	// If the newMS is not scaling up, nothing left to do.
+	if scaleIntent, ok := p.scaleIntents[p.newMS.Name]; !ok || scaleIntent < ptr.Deref(p.newMS.Spec.Replicas, 0) {
+		return nil
+	}
+
+	// FIXME: Test and document
+	// If the newMS is scaling up while there are still in place updates to be performed,
+	// then consider if it is required to revisit the scale up target for the newMS thus deferring creation of new machines due to maxSurge (give priority to in place).
+	//
+	// Three outcomes are possible:
+	// - There are already OldMS scaling down or with then intent of scale down: the newMS should drop the scale up count that can be traced back to maxSurge.
+	// - There no OldMS scaling down or with then intent of scale down:
+	// 	 - If available replicas(*) is less or equal to minAvailableReplicas, the newMS should drop the scale up count that can be traced back to maxSurge && it is exceeding 1
+	//     Note: in this case creating one replicas from MaxSurge is required to allow in place upgrades to (re)start; we should not want to create more than one new machines (give priority to in place).
+	// 	 - If there are more available replicas(*) than minAvailableReplicas, the newMS should drop the scale up count that can be traced back to maxSurge;
+	// 	   then we should trigger another round of scaleDownOldMachineSetsForRollingUpdate (give priority to in place).
+	//
+	// (*) available replicas for this computation must include also replicas still in place upgrading because we should give them
+	// time to complete the upgrade before resolving to create new machines.
+	// If in-place upgrade will fail instead, it will unblock creating of machines after remediation happens.
+
+	hasOldMSScalingDown := false
+	for _, oldMS := range p.oldMSs {
+		if ptr.Deref(oldMS.Spec.Replicas, 0) < ptr.Deref(oldMS.Status.Replicas, 0) {
+			hasOldMSScalingDown = true
+			break
+		}
+		if scaleIntent, ok := p.scaleIntents[oldMS.Name]; ok && scaleIntent < ptr.Deref(oldMS.Spec.Replicas, 0) {
+			hasOldMSScalingDown = true
+			break
+		}
+	}
+
+	totUpdatingInPlace := int32(0)
+	for _, m := range p.machines {
+		if !util.IsControlledBy(m, p.newMS, clusterv1.GroupVersion.WithKind("MachineSet").GroupKind()) {
+			continue
+		}
+		if _, ok := m.Annotations[updatingInPlaceAnnotationName]; !ok {
+			continue
+		}
+		totUpdatingInPlace++
+	}
+
+	minAvailableReplicas := ptr.Deref(p.md.Spec.Replicas, 0) - mdutil.MaxUnavailable(*p.md)
+	totAvailableReplicas := ptr.Deref(mdutil.GetAvailableReplicaCountForMachineSets(allMSs), 0) + totUpdatingInPlace
+
+	scaleUpCount := p.scaleIntents[p.newMS.Name] - ptr.Deref(p.newMS.Spec.Replicas, 0)
+	scaleUpCountWithoutMaxSurge := max(ptr.Deref(p.md.Spec.Replicas, 0)-mdutil.TotalMachineSetsReplicaSum(allMSs), 0)
+
+	// if it is required to revisit the scale up target for the newMS thus deferring creation of new machines due to maxSurge (give priority to in place)
+	if scaleUpCount > scaleUpCountWithoutMaxSurge {
+		// Scenario 1:
+		// There are already OldMS scaling down or with then intent of scale down: the newMS should drop the scale up count that can be traced back to maxSurge.
+		newScaleUpCount := scaleUpCountWithoutMaxSurge
+		if newScaleUpCount == 0 && !hasOldMSScalingDown && totAvailableReplicas <= minAvailableReplicas {
+			// FIXME: test
+			// Scenario 2:
+			// There no OldMS scaling down or with then intent of scale down and
+			// available replicas(*) is less or equal to minAvailableReplicas, the newMS should drop the scale up count that can be traced back to maxSurge && it is exceeding 1
+			// Note: in this case creating one replicas from MaxSurge is required to allow in place upgrades to (re)start; we should not want to create more than one new machines (give priority to in place).
+			// Note: in case newMS is already scaling up, do not add more.
+			if ptr.Deref(p.newMS.Spec.Replicas, 0) <= ptr.Deref(p.newMS.Status.Replicas, 0) {
+				newScaleUpCount = 1
+			}
+		}
+		newScaleIntent := ptr.Deref(p.newMS.Spec.Replicas, 0) + newScaleUpCount
+		log.V(5).Info(fmt.Sprintf("Revisit scale up intent for MachineSet %s to %d replicas (+%d) to prevent creation of new machines while there are still in place updates to be performed", p.newMS.Name, newScaleIntent, newScaleUpCount), "MachineSet", klog.KObj(p.newMS))
+		if newScaleUpCount == 0 {
+			// FIXME: test
+			delete(p.scaleIntents, p.newMS.Name)
+		} else {
+			p.scaleIntents[p.newMS.Name] = newScaleIntent
+		}
+
+		if !hasOldMSScalingDown && minAvailableReplicas < totAvailableReplicas {
+			// FIXME: test
+			// Scenario 3:
+			// There no OldMS scaling down or with then intent of scale down and
+			// there are more available replicas(*) than minAvailableReplicas, the newMS should drop the scale up count that can be traced back to maxSurge;
+			// then we should trigger another round of scaleDownOldMachineSetsForRollingUpdate (give priority to in place).
+			return p.reconcileOldMachineSetsRollingUpdate(ctx)
+		}
+	}
+
+	return nil
+}
+
 // This funcs tries to detect and address the case when a rollout is not making progress because both scaling down and scaling up are blocked.
 // Note: This func must be called after computing scale up/down intent for all the MachineSets.
 // Note: This func only address deadlock due to unavailable machines not getting deleted on oldMSs, e.g. due to a wrong configuration.
@@ -362,4 +584,40 @@ func (p *rolloutPlanner) reconcileDeadlockBreaker(ctx context.Context) {
 		p.scaleIntents[oldMS.Name] = newScaleIntent
 		return
 	}
+}
+
+// scaleDownMovingToAnnotationName is an internal annotation added by the MD controller to the oldMS
+// when it should scale down by moving machines that can be update in-place to the newMS instead of deleting them.
+// Note: This annotation is used to perform a two-ways check before moving a machine from oldMS to new MS:
+//
+//	"oldMS must have: move to newMS" and "newMS must have: accept replicas from oldMS"
+const scaleDownMovingToAnnotationName = "internal.cluster.x-k8s.io/scale-down-moving-to"
+
+// acceptReplicasFromAnnotationName is an internal annotation added by the MD controller to the newMS
+// when it should accept replicas from an old machines as a first step of an in-place upgrade operation.
+// Note: This annotation is used to perform a two-ways check before moving a machine from oldMS to new MS:
+//
+//	"oldMS must have: move to newMS" and "newMS must have: accept replicas from oldMS"
+const acceptReplicasFromAnnotationName = "internal.cluster.x-k8s.io/accept-replicas-from"
+
+// FIXME: find a better place, discuss with Stefan updatingInPlaceAnnotationName
+
+// pendingAcknowledgeMoveAnnotationName is an internal annotation added by the MS controller to a machine when being
+// moved from the oldMS to the newMS. The annotation is removed as soon as the MS controller get the acknowledge from the corresponding MD.
+// Note: the annotation is added when reconciling the oldMS, and it is removed when reconciling the newMS.
+const pendingAcknowledgeMoveAnnotationName = "internal.cluster.x-k8s.io/pending-acknowledge-move"
+
+// FIXME: once defined, use a target signal for "this machine is upgrading in place".
+const updatingInPlaceAnnotationName = "internal.cluster.x-k8s.io/updating-in-place"
+
+// acknowledgeAnnotationName is an internal annotation with a list of machines added by the MD controller
+// to a MachineSet when it acknowledges a machine pending acknowled after being moved from an oldMS.
+// A machine is dropped from this annotation as soon as pending-acknowledge-move is removed from the machine;
+// the annotation is dropped when empty.
+// Note: this annotation is used in pair with replicasMachineDeploymentAcknowledgeAnnotation and replicaPendingMachineDeploymentAcknowledgeAnnotation.
+const acknowledgeMoveAnnotationName = "internal.cluster.x-k8s.io/acknowledge-move"
+
+func sortAndJoin(a []string) string {
+	sort.Strings(a)
+	return strings.Join(a, ",")
 }

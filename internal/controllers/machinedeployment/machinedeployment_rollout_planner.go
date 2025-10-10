@@ -44,14 +44,18 @@ type rolloutPlanner struct {
 	oldMSs                  []*clusterv1.MachineSet
 	oldMSNotUpToDateResults map[string]mdutil.NotUpToDateResult
 
-	scaleIntents     map[string]int32
-	computeDesiredMS func(ctx context.Context, deployment *clusterv1.MachineDeployment, currentMS *clusterv1.MachineSet) (*clusterv1.MachineSet, error)
+	scaleIntents         map[string]int32
+	computeDesiredMS     func(ctx context.Context, deployment *clusterv1.MachineDeployment, currentMS *clusterv1.MachineSet) (*clusterv1.MachineSet, error)
+	getCanUpdateDecision func(oldMS *clusterv1.MachineSet) bool
 }
 
 func newRolloutPlanner() *rolloutPlanner {
 	return &rolloutPlanner{
 		scaleIntents:     make(map[string]int32),
 		computeDesiredMS: computeDesiredMS,
+		getCanUpdateDecision: func(_ *clusterv1.MachineSet) bool {
+			return false
+		},
 	}
 }
 
