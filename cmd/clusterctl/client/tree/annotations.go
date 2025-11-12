@@ -182,11 +182,11 @@ func IsVirtualObject(obj client.Object) bool {
 }
 
 // IsShowConditionsObject returns true if the presentation layer should show all the conditions for the object.
-func IsShowConditionsObject(obj client.Object) bool {
-	if val, ok := getBoolAnnotation(obj, ShowObjectConditionsAnnotation); ok {
+func IsShowConditionsObject(obj client.Object) string {
+	if val, ok := getAnnotation(obj, ShowObjectConditionsAnnotation); ok {
 		return val
 	}
-	return false
+	return ""
 }
 
 func getAnnotation(obj client.Object, annotation string) (string, bool) {
