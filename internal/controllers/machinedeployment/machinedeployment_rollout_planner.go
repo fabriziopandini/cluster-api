@@ -19,6 +19,7 @@ package machinedeployment
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -52,6 +53,7 @@ type rolloutPlanner struct {
 	upToDateResults map[string]mdutil.UpToDateResult
 
 	scaleIntents                          map[string]int32
+	notes                                 map[string][]string
 	overrideComputeDesiredMS              func(ctx context.Context, deployment *clusterv1.MachineDeployment, currentMS *clusterv1.MachineSet) (*clusterv1.MachineSet, error)
 	overrideCanUpdateMachineSetInPlace    func(ctx context.Context, oldMS, newMS *clusterv1.MachineSet) (bool, error)
 	overrideCanExtensionsUpdateMachineSet func(ctx context.Context, oldMS, newMS *clusterv1.MachineSet, templateObjects *templateObjects, extensionHandlers []string) (bool, []string, error)
@@ -62,6 +64,7 @@ func newRolloutPlanner(c client.Client, runtimeClient runtimeclient.Client) *rol
 		Client:        c,
 		RuntimeClient: runtimeClient,
 		scaleIntents:  make(map[string]int32),
+		notes:         make(map[string][]string),
 	}
 }
 
@@ -324,4 +327,15 @@ func computeDesiredMS(ctx context.Context, deployment *clusterv1.MachineDeployme
 	desiredMS.Spec.Template.Spec.Deletion.NodeVolumeDetachTimeoutSeconds = deployment.Spec.Template.Spec.Deletion.NodeVolumeDetachTimeoutSeconds
 
 	return desiredMS, nil
+}
+
+func (p *rolloutPlanner) addNote(ms *clusterv1.MachineSet, format string, a ...any) {
+	p.notes[ms.Name] = append(p.notes[ms.Name], fmt.Sprintf(format, a...))
+}
+
+func (p *rolloutPlanner) noteSummary(ms *clusterv1.MachineSet) string {
+	if len(p.notes[ms.Name]) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(": %s", strings.Join(p.notes[ms.Name], ", "))
 }

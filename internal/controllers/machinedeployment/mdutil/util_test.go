@@ -817,7 +817,8 @@ func TestNewMSNewReplicas(t *testing.T) {
 				MaxSurge:       ptr.To(intstr.FromInt32(test.maxSurge)),
 			}
 			*(newRC.Spec.Replicas) = test.newMSReplicas
-			ms, err := NewMSNewReplicas(&newDeployment, []*clusterv1.MachineSet{&rs5}, *newRC.Spec.Replicas)
+			// FIXME:
+			ms, _, err := NewMSNewReplicas(&newDeployment, []*clusterv1.MachineSet{&rs5}, *newRC.Spec.Replicas)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(ms).To(Equal(test.expected))
 		})

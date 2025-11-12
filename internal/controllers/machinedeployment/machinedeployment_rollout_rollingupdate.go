@@ -145,6 +145,7 @@ func (p *rolloutPlanner) reconcileReplicasPendingAcknowledgeMove(ctx context.Con
 		replicaCount := ptr.Deref(p.newMS.Spec.Replicas, 0) + totNewAcknowledgeMoveReplicasToScaleUp
 		scaleUpCount := totNewAcknowledgeMoveReplicasToScaleUp
 		p.newMS.Spec.Replicas = ptr.To(replicaCount)
+		p.addNote(p.newMS, "acknowledge Machine %s moved from an old MachineSet", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()))
 		log.V(5).Info(fmt.Sprintf("Acknowledge replicas %s moved from an old MachineSet. Scale up MachineSet %s to %d (+%d)", sortAndJoin(newAcknowledgeMoveReplicas.UnsortedList()), p.newMS.Name, replicaCount, scaleUpCount), "MachineSet", klog.KObj(p.newMS))
 	}
 
@@ -185,23 +186,26 @@ func (p *rolloutPlanner) reconcileNewMachineSet(ctx context.Context) error {
 
 	if *(p.newMS.Spec.Replicas) > *(p.md.Spec.Replicas) {
 		// Scale down.
+		p.addNote(p.newMS, "scale down to align MachineSet.spec.replicas to MachineDeployment.spec.replicas")
 		log.V(5).Info(fmt.Sprintf("Setting scale down intent for MachineSet %s to %d replicas", p.newMS.Name, *(p.md.Spec.Replicas)), "MachineSet", klog.KObj(p.newMS))
 		p.scaleIntents[p.newMS.Name] = *(p.md.Spec.Replicas)
 		return nil
 	}
 
-	newReplicasCount, err := mdutil.NewMSNewReplicas(p.md, allMSs, *p.newMS.Spec.Replicas)
+	newReplicasCount, note, err := mdutil.NewMSNewReplicas(p.md, allMSs, *p.newMS.Spec.Replicas)
 	if err != nil {
 		return err
 	}
 
 	if newReplicasCount < *(p.newMS.Spec.Replicas) {
 		scaleDownCount := *(p.newMS.Spec.Replicas) - newReplicasCount
+		p.addNote(p.newMS, note)
 		log.V(5).Info(fmt.Sprintf("Setting scale down intent for MachineSet %s to %d replicas (-%d)", p.newMS.Name, newReplicasCount, scaleDownCount), "MachineSet", klog.KObj(p.newMS))
 		p.scaleIntents[p.newMS.Name] = newReplicasCount
 	}
 	if newReplicasCount > *(p.newMS.Spec.Replicas) {
 		scaleUpCount := newReplicasCount - *(p.newMS.Spec.Replicas)
+		p.addNote(p.newMS, note)
 		log.V(5).Info(fmt.Sprintf("Setting scale up intent for MachineSet %s to %d replicas (+%d)", p.newMS.Name, newReplicasCount, scaleUpCount), "MachineSet", klog.KObj(p.newMS))
 		p.scaleIntents[p.newMS.Name] = newReplicasCount
 	}
@@ -301,6 +305,8 @@ func (p *rolloutPlanner) scaleDownOldMSs(ctx context.Context, totalScaleDownCoun
 			continue
 		}
 
+		oldTotalAvailableReplicas := totalAvailableReplicas
+
 		// Compute the scale down extent by considering either all replicas or, if scaleDownOnlyUnavailableReplicas is set, unavailable replicas only.
 		// In both cases, scale down is limited to totalScaleDownCount.
 		// Exit if there is no room for scaling down the MS.
@@ -365,6 +371,7 @@ func (p *rolloutPlanner) scaleDownOldMSs(ctx context.Context, totalScaleDownCoun
 
 		if scaleDown > 0 {
 			newScaleIntent := max(replicas-scaleDown, 0)
+			p.addNote(oldMS, "%d available replicas > %d minimum available replicas", oldTotalAvailableReplicas, minAvailable)
 			log.V(5).Info(fmt.Sprintf("Setting scale down intent for MachineSet %s to %d replicas (-%d)", oldMS.Name, newScaleIntent, scaleDown), "MachineSet", klog.KObj(oldMS))
 			p.scaleIntents[oldMS.Name] = newScaleIntent
 			totalScaleDownCount = max(totalScaleDownCount-scaleDown, 0)
@@ -433,6 +440,7 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context) error
 		if oldMS.Annotations == nil {
 			oldMS.Annotations = map[string]string{}
 		}
+		p.addNote(oldMS, "should scale down moving Machines to MachineSet %s", p.newMS.Name)
 		oldMS.Annotations[clusterv1.MachineSetMoveMachinesToMachineSetAnnotation] = p.newMS.Name
 		inPlaceUpdateCandidates.Insert(oldMS.Name)
 	}
@@ -487,6 +495,9 @@ func (p *rolloutPlanner) reconcileInPlaceUpdateIntent(ctx context.Context) error
 	//   through remediation before creating additional machines)
 	if newScaleUpCount == 0 && !p.scalingOrInPlaceUpdateInProgress(ctx) {
 		newScaleUpCount = 1
+		p.addNote(p.newMS, "surge 1 allowed to create availability for in-place updates")
+	} else {
+		p.addNote(p.newMS, "prioritizing in-place updates, surge %d deferred", maxSurgeUsed)
 	}
 
 	newScaleIntent := ptr.Deref(p.newMS.Spec.Replicas, 0) + newScaleUpCount
@@ -588,6 +599,7 @@ func (p *rolloutPlanner) reconcileDeadlockBreaker(ctx context.Context) {
 		}
 
 		newScaleIntent := max(ptr.Deref(oldMS.Spec.Replicas, 0)-1, 0)
+		p.addNote(p.newMS, "unblock")
 		log.Info(fmt.Sprintf("Setting scale down intent for MachineSet %s to %d replicas (-%d) to unblock rollout stuck due to unavailable Machine on oldMS", oldMS.Name, newScaleIntent, 1), "MachineSet", klog.KObj(oldMS))
 		p.scaleIntents[oldMS.Name] = newScaleIntent
 		return
