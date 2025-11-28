@@ -45,6 +45,10 @@ const (
 
 	// EventMachineMarkedUnhealthy is emitted when machine was successfully marked as unhealthy.
 	EventMachineMarkedUnhealthy string = "MachineMarkedUnhealthy"
+
+	// EventDetectedUnhealthy is emitted in case a node associated with a
+	// machine was detected unhealthy.
+	EventDetectedUnhealthy string = "DetectedUnhealthy"
 )
 
 var (
@@ -402,6 +406,14 @@ func (r *Reconciler) healthCheckTargets(targets []healthCheckTarget, logger logr
 		if nextCheck > 0 {
 			logger.V(3).Info("Target is likely to go unhealthy", "timeUntilUnhealthy", nextCheck.Truncate(time.Second).String())
 			nextCheckTimes = append(nextCheckTimes, nextCheck)
+
+			r.recorder.Eventf(
+				t.Machine,
+				corev1.EventTypeNormal,
+				EventDetectedUnhealthy,
+				"Machine %s if failing health checks, remediation will be triggered if the issue persist",
+				klog.KObj(t.Machine),
+			)
 			continue
 		}
 
