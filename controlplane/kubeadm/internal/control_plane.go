@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,6 +39,7 @@ import (
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd"
 	"sigs.k8s.io/cluster-api/internal/hooks"
 	"sigs.k8s.io/cluster-api/internal/util/inplace"
+	"sigs.k8s.io/cluster-api/internal/util/taints"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/cluster-api/util/failuredomains"
@@ -493,4 +495,18 @@ func (c *ControlPlane) GetKeyEncryptionAlgorithm() bootstrapv1.EncryptionAlgorit
 		return bootstrapv1.EncryptionAlgorithmRSA2048
 	}
 	return c.KCP.Spec.KubeadmConfigSpec.ClusterConfiguration.EncryptionAlgorithm
+}
+
+// DefaultTaintIsMissing reports true if the default control plane taint is missing.
+// Note: the default control plane taint is added if the machine's KubeadmConfig doesn't have taints defined; the check assumes
+// taints for both the init control plane machine and joining control plane machines are either set or not set.
+func (c *ControlPlane) DefaultTaintIsMissing(machine *clusterv1.Machine, node *corev1.Node) bool {
+	shouldHaveTaint := false
+	if c, ok := c.KubeadmConfigs[machine.Name]; ok {
+		shouldHaveTaint = c.Spec.InitConfiguration.NodeRegistration.Taints == nil && c.Spec.JoinConfiguration.NodeRegistration.Taints == nil
+	}
+	if shouldHaveTaint && !taints.HasTaint(node.Spec.Taints, corev1.Taint{Key: labelNodeRoleControlPlane, Effect: corev1.TaintEffectNoSchedule}) {
+		return true
+	}
+	return false
 }
