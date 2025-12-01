@@ -555,6 +555,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          false,
@@ -581,6 +582,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          true,
@@ -613,6 +615,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          true,
@@ -632,6 +635,33 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: deleteRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               true,
+				CertificateMissing:               false,
+				ControlPlaneComponentsNotHealthy: false,
+				EtcdClusterNotHealthy:            false,
+				TopologyVersionMismatch:          false,
+			},
+			expectDeferNextReconcile: 5 * time.Second,
+		},
+		{
+			name: "control plane without certificates should requeue",
+			kcp: &controlplanev1.KubeadmControlPlane{
+				Status: controlplanev1.KubeadmControlPlaneStatus{
+					Conditions: []metav1.Condition{
+						{
+							Type:   controlplanev1.KubeadmControlPlaneCertificatesAvailableCondition,
+							Status: metav1.ConditionFalse,
+							Reason: controlplanev1.KubeadmControlPlaneCertificatesNotAvailableReason,
+						},
+					},
+				},
+			},
+			machines: []*clusterv1.Machine{
+				{},
+			},
+			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
+			expectPreflight: internal.PreflightCheckResults{
+				HasDeletingMachine:               false,
+				CertificateMissing:               true,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          false,
@@ -652,6 +682,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: true,
 				EtcdClusterNotHealthy:            true,
 				TopologyVersionMismatch:          false,
@@ -680,6 +711,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: true,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          false,
@@ -708,6 +740,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{RequeueAfter: preflightFailedRequeueAfter},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            true,
 				TopologyVersionMismatch:          false,
@@ -743,6 +776,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          false,
@@ -792,6 +826,7 @@ func TestPreflightChecks(t *testing.T) {
 			expectResult: ctrl.Result{},
 			expectPreflight: internal.PreflightCheckResults{
 				HasDeletingMachine:               false,
+				CertificateMissing:               false,
 				ControlPlaneComponentsNotHealthy: false,
 				EtcdClusterNotHealthy:            false,
 				TopologyVersionMismatch:          false,
