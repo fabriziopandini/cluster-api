@@ -38,7 +38,7 @@ type PatchHelper interface {
 	HasSpecChanges() bool
 
 	// Changes returns the changes vs the original object.
-	Changes() []byte
+	Changes() string
 
 	// Patch patches the given obj in the Kubernetes cluster.
 	Patch(ctx context.Context) (modifiedResourceVersion string, err error)

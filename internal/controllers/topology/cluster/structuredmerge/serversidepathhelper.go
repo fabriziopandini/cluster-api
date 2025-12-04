@@ -36,7 +36,7 @@ type serverSidePatchHelper struct {
 	modified       *unstructured.Unstructured
 	hasChanges     bool
 	hasSpecChanges bool
-	changes        []byte
+	changes        string
 }
 
 // NewServerSidePatchHelper returns a new PatchHelper using server side apply.
@@ -90,7 +90,7 @@ func NewServerSidePatchHelper(ctx context.Context, original, modified client.Obj
 	// Determine if the intent defined in the modified object is going to trigger
 	// an actual change when running server side apply, and if this change might impact the object spec or not.
 	var hasChanges, hasSpecChanges bool
-	var changes []byte
+	var changes string
 	switch {
 	case util.IsNil(original):
 		hasChanges, hasSpecChanges = true, true
@@ -123,7 +123,7 @@ func (h *serverSidePatchHelper) HasSpecChanges() bool {
 }
 
 // Changes return the changes.
-func (h *serverSidePatchHelper) Changes() []byte {
+func (h *serverSidePatchHelper) Changes() string {
 	return h.changes
 }
 
