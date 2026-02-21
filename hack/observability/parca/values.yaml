@@ -8,6 +8,7 @@ object_storage:
 
 server:
   image:
+    repository: docker.io/stefanburinger405/parca
     tag: v0.25.0
   scrapeConfigs:
   - job_name: 'capi-providers'
