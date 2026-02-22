@@ -22,24 +22,6 @@ spec:
     metricNamePrefix: capi_clusterresourceset
     metrics:
     - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a clusterresourceset.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -109,41 +91,6 @@ spec:
         type: Info
       help: Information about a kubeadmconfig.
       name: info
-    - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a kubeadmconfig.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -257,24 +204,6 @@ spec:
         by the controllers.
       name: spec_paused
     - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a cluster.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -357,41 +286,6 @@ spec:
         type: Info
       help: Information about a clusterclass.
       name: info
-    - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a clusterclass.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -523,23 +417,6 @@ spec:
       help: Information about a machine.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
         gauge:
           nilIsZero: true
           path:
@@ -549,24 +426,6 @@ spec:
         type: Gauge
       help: Information about certificate expiration date of a control plane node.
       name: status_certificatesexpirydate
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a machine.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -696,23 +555,6 @@ spec:
       help: Information about a machinedeployment.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
         gauge:
           nilIsZero: true
           path:
@@ -760,24 +602,6 @@ spec:
         type: Gauge
       help: Maximum number of unavailable replicas during a rolling update of a machinedeployment.
       name: spec_strategy_rollingupdate_max_unavailable
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a machinedeployment.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -911,41 +735,6 @@ spec:
       help: Information about a machinehealthcheck.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a machinehealthcheck.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -1078,23 +867,6 @@ spec:
       help: Information about a machinepool.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
         gauge:
           nilIsZero: false
           path:
@@ -1104,24 +876,6 @@ spec:
         type: Gauge
       help: The number of desired machines for a machinepool.
       name: spec_replicas
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a machinepool.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -1276,23 +1030,6 @@ spec:
       help: Information about a machineset.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
         gauge:
           nilIsZero: true
           path:
@@ -1302,24 +1039,6 @@ spec:
         type: Gauge
       help: The number of desired machines for a machineset.
       name: spec_replicas
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a machineset.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -1432,23 +1151,6 @@ spec:
       help: Information about a kubeadmcontrolplane.
       name: info
     - each:
-        info:
-          labelsFromPath:
-            owner_is_controller:
-            - controller
-            owner_kind:
-            - kind
-            owner_name:
-            - name
-            owner_uid:
-            - uid
-          path:
-          - metadata
-          - ownerReferences
-        type: Info
-      help: Owner references.
-      name: owner
-    - each:
         gauge:
           nilIsZero: false
           path:
@@ -1472,24 +1174,6 @@ spec:
       help: Maximum number of replicas that can be scheduled above the desired number
         of replicas during a rolling update of a kubeadmcontrolplane.
       name: spec_strategy_rollingupdate_max_surge
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a kubeadmcontrolplane.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -1569,24 +1253,6 @@ spec:
     metricNamePrefix: capi_devcluster
     metrics:
     - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a devcluster.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -1624,24 +1290,6 @@ spec:
       - uid
     metricNamePrefix: capi_devmachine
     metrics:
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a devmachine.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -1681,24 +1329,6 @@ spec:
     metricNamePrefix: capi_dockercluster
     metrics:
     - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a dockercluster.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -1736,24 +1366,6 @@ spec:
       - uid
     metricNamePrefix: capi_dockermachine
     metrics:
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a dockermachine.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
@@ -1793,24 +1405,6 @@ spec:
     metricNamePrefix: capi_ipaddressclaim
     metrics:
     - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a ipaddressclaim.
-      name: status_condition
-    - each:
         gauge:
           labelsFromPath:
             status:
@@ -1844,24 +1438,6 @@ spec:
       - uid
     metricNamePrefix: capi_extensionconfig
     metrics:
-    - each:
-        stateSet:
-          labelName: status
-          labelsFromPath:
-            type:
-            - type
-          list:
-          - "True"
-          - "False"
-          - Unknown
-          path:
-          - status
-          - conditions
-          valueFrom:
-          - status
-        type: StateSet
-      help: The condition of a extensionconfig.
-      name: status_condition
     - each:
         gauge:
           labelsFromPath:
