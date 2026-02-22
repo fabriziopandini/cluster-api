@@ -19,7 +19,10 @@ server:
   - "web.enable-remote-write-receiver"
   persistentVolume:
     # Give Prometheus more space to store metrics.
-    size: 20Gi
+    size: 256Gi
+  global:
+    scrape_interval: 1m
+    scrape_timeout: 30s
 
 scrapeConfigs:
   kubernetes-nodes:
