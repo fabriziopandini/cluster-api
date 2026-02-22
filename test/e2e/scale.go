@@ -312,8 +312,8 @@ func ScaleSpec(ctx context.Context, inputGetter func() ScaleSpecInput) {
 					},
 				}
 			}
-			Expect(input.BootstrapClusterProxy.GetClient().Create(ctx,
-				extensionConfig)).
+			Expect(client.IgnoreAlreadyExists(input.BootstrapClusterProxy.GetClient().Create(ctx,
+				extensionConfig))).
 				To(Succeed(), "Failed to create the ExtensionConfig")
 		}
 
@@ -677,7 +677,7 @@ outer:
 	for _, result := range results {
 		if result.err != nil {
 			if e, ok := result.err.(types.GinkgoError); ok {
-				errs = append(errs, errors.Errorf("[clusterName: %q] Stack trace: \n %s", result.clusterName, e.CodeLocation.FullStackTrace))
+				errs = append(errs, errors.Errorf("[clusterName: %q] Error: %v Stack trace: \n %s", result.clusterName, result.err, e.CodeLocation.FullStackTrace))
 			} else {
 				errs = append(errs, errors.Errorf("[clusterName: %q] Error: %v", result.clusterName, result.err))
 			}
@@ -737,7 +737,6 @@ func createClusterWorker(ctx context.Context, clusterProxy framework.ClusterProx
 				if !open {
 					return true
 				}
-				log.Logf("Creating cluster %s", clusterName)
 
 				// This defer will catch ginkgo failures and record them.
 				// The recorded panics are then handled by the parent goroutine.
@@ -759,13 +758,15 @@ func createClusterWorker(ctx context.Context, clusterProxy framework.ClusterProx
 				// * Adjust namespace in ClusterClass YAML.
 				// * Create new namespace.
 				if deployClusterInSeparateNamespaces {
-					log.Logf("Create namespace %s", namespaceName)
-					_ = framework.CreateNamespace(ctx, framework.CreateNamespaceInput{
-						Creator:             clusterProxy.GetClient(),
-						Name:                namespaceName,
-						IgnoreAlreadyExists: true,
-						Labels:              map[string]string{"e2e-test": specName},
-					}, "40s", "10s")
+					if err := clusterProxy.GetClient().Get(ctx, client.ObjectKey{Name: namespaceName}, &corev1.Namespace{}); err != nil {
+						log.Logf("Create namespace %s", namespaceName)
+						_ = framework.CreateNamespace(ctx, framework.CreateNamespaceInput{
+							Creator:             clusterProxy.GetClient(),
+							Name:                namespaceName,
+							IgnoreAlreadyExists: true,
+							Labels:              map[string]string{"e2e-test": specName},
+						}, "40s", "10s")
+					}
 				}
 
 				// Call postScaleClusterNamespaceCreated hook to apply custom requirements based on the cluster name and namespace
@@ -811,8 +812,11 @@ func createClusterWorker(ctx context.Context, clusterProxy framework.ClusterProx
 				clusterTemplateYAML = bytes.ReplaceAll(clusterTemplateYAML, []byte(scaleClusterNamespacePlaceholder), []byte(namespaceName))
 				clusterTemplateYAML = bytes.ReplaceAll(clusterTemplateYAML, []byte(scaleClusterNamePlaceholder), []byte(clusterName))
 
-				// Deploy Cluster.
-				create(ctx, namespaceName, clusterName, clusterTemplateYAML)
+				if err := clusterProxy.GetClient().Get(ctx, client.ObjectKey{Namespace: namespaceName, Name: clusterName}, &clusterv1.Cluster{}); err != nil {
+					log.Logf("Creating cluster %s", clusterName)
+					create(ctx, namespaceName, clusterName, clusterTemplateYAML)
+				}
+
 				return false
 			}
 		}()
