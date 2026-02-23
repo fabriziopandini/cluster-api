@@ -25,6 +25,8 @@ deploymentMode: SingleBinary
 
 singleBinary:
   replicas: 1
+  persistence:
+    size: 256Gi
 
 gateway:
   enabled: false
