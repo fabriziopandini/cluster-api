@@ -25,8 +25,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"sigs.k8s.io/cluster-api/util/version"
 )
 
 const (
@@ -57,24 +55,23 @@ func (w *Workload) EnsureResource(ctx context.Context, obj client.Object) error 
 // AllowClusterAdminPermissions creates ClusterRoleBinding rules to use the kubeadm:cluster-admins Cluster Role created in Kubeadm v1.29.
 func (w *Workload) AllowClusterAdminPermissions(ctx context.Context, targetVersion semver.Version) error {
 	// Do nothing for Kubernetes < 1.29.
-	if version.Compare(targetVersion, semver.Version{Major: 1, Minor: 29, Patch: 0}, version.WithoutPreReleases()) < 0 {
-		return nil
-	}
-	return w.EnsureResource(ctx, &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ClusterAdminsGroupAndClusterRoleBinding,
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind: rbacv1.GroupKind,
+	if targetVersion.Major == 1 && targetVersion.Minor == 29 {
+		return w.EnsureResource(ctx, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: ClusterAdminsGroupAndClusterRoleBinding,
 			},
-		},
-	},
-	)
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     "cluster-admin",
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind: rbacv1.GroupKind,
+					Name: ClusterAdminsGroupAndClusterRoleBinding,
+				},
+			},
+		})
+	}
+	return nil
 }

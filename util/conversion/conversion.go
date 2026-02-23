@@ -46,13 +46,24 @@ const (
 // MarshalData stores the source object as json data in the destination object annotations map.
 // It ignores the metadata of the source object.
 func MarshalData(src metav1.Object, dst metav1.Object) error {
-	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(src)
-	if err != nil {
-		return err
-	}
-	delete(u, "metadata")
+	// Remove metadata
+	src.SetNamespace("")
+	src.SetName("")
+	src.SetGenerateName("")
+	src.SetUID("")
+	src.SetResourceVersion("")
+	src.SetGeneration(0)
+	src.SetSelfLink("")
+	src.SetCreationTimestamp(metav1.Time{})
+	src.SetDeletionTimestamp(nil)
+	src.SetDeletionGracePeriodSeconds(nil)
+	src.SetLabels(nil)
+	src.SetAnnotations(nil)
+	src.SetFinalizers(nil)
+	src.SetOwnerReferences(nil)
+	src.SetManagedFields(nil)
 
-	data, err := json.Marshal(u)
+	data, err := json.Marshal(src)
 	if err != nil {
 		return err
 	}
@@ -198,7 +209,7 @@ func FuzzTestFunc(input FuzzTestFuncInput) func(*testing.T) {
 
 				// First convert hub to spoke
 				dstCopy := input.Spoke.DeepCopyObject().(conversion.Convertible)
-				g.Expect(dstCopy.ConvertFrom(hubBefore)).To(gomega.Succeed())
+				g.Expect(dstCopy.ConvertFrom(hubBefore.DeepCopyObject().(conversion.Hub))).To(gomega.Succeed())
 
 				// Convert spoke back to hub and check if the resulting hub is equal to the hub before the round trip
 				hubAfter := input.Hub.DeepCopyObject().(conversion.Hub)

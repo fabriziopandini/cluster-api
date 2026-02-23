@@ -22,7 +22,7 @@ server:
     size: 256Gi
   global:
     scrape_interval: 1m
-    scrape_timeout: 30s
+    scrape_timeout: 1m
 
 scrapeConfigs:
   kubernetes-nodes:

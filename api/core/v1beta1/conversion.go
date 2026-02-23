@@ -432,6 +432,17 @@ func (dst *Machine) ConvertFrom(srcRaw conversion.Hub) error {
 
 	dropEmptyStringsMachineSpec(&dst.Spec)
 
+	src = &clusterv1.Machine{
+		Spec: clusterv1.MachineSpec{
+			MinReadySeconds: src.Spec.MinReadySeconds,
+			Taints:          src.Spec.Taints,
+		},
+		Status: clusterv1.MachineStatus{
+			Phase:          src.Status.Phase,
+			FailureDomain:  src.Status.FailureDomain,
+			Initialization: src.Status.Initialization,
+		},
+	}
 	return utilconversion.MarshalData(src, dst)
 }
 

@@ -54,7 +54,7 @@ const (
 	// DefaultMinPort default min port of the workload clusters mux.
 	DefaultMinPort = 20000
 	// DefaultMaxPort default max port of the workload clusters mux.
-	DefaultMaxPort = 24000
+	DefaultMaxPort = 30000
 )
 
 // WorkloadClustersMuxOption define an option for the WorkloadClustersMux creation.
@@ -313,6 +313,31 @@ func (m *WorkloadClustersMux) InitWorkloadClusterListener(wclName string) (*Work
 	port, err := m.getFreePortLocked()
 	if err != nil {
 		return nil, err
+	}
+
+	wcl := m.initWorkloadClusterListenerWithPortLocked(wclName, port)
+
+	return wcl, nil
+}
+
+// InitWorkloadClusterListenerWithPort initialize a WorkloadClusterListener by reserving a port for it.
+// Note: The listener will be started when the first API server will be added.
+func (m *WorkloadClustersMux) InitWorkloadClusterListenerWithPort(wclName string, port int32) (*WorkloadClusterListener, error) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if wcl, ok := m.workloadClusterListeners[wclName]; ok {
+		return wcl, nil
+	}
+
+	if port == 0 {
+		var err error
+		port, err = m.getFreePortLocked()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		m.portIndex = max(m.portIndex, port+1)
 	}
 
 	wcl := m.initWorkloadClusterListenerWithPortLocked(wclName, port)
