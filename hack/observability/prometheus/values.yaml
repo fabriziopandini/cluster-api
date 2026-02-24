@@ -21,8 +21,8 @@ server:
     # Give Prometheus more space to store metrics.
     size: 256Gi
   global:
-    scrape_interval: 1m
-    scrape_timeout: 1m
+    scrape_interval: 60s
+    scrape_timeout: 59s
 
 scrapeConfigs:
   kubernetes-nodes:
@@ -36,7 +36,8 @@ scrapeConfigs:
 extraScrapeConfigs: |
   - job_name: 'capi-providers'
     # 15s is a bit often for production but helps to get metrics quicker for development.
-    scrape_interval: 15s
+    scrape_interval: 30s
+    scrape_timeout: 29s
     scrape_native_histograms: true
     always_scrape_classic_histograms: true
     metrics_path: /metrics

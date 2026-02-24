@@ -20,9 +20,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -33,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
@@ -42,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/structured-merge-diff/v6/typed"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
@@ -665,6 +669,9 @@ func (r *Reconciler) syncMachines(ctx context.Context, s *scope) (ctrl.Result, b
 			m.Spec.ReadinessGates = machineSet.Spec.Template.Spec.ReadinessGates
 			m.Spec.Deletion.NodeDrainTimeoutSeconds = machineSet.Spec.Template.Spec.Deletion.NodeDrainTimeoutSeconds
 			m.Spec.Deletion.NodeDeletionTimeoutSeconds = machineSet.Spec.Template.Spec.Deletion.NodeDeletionTimeoutSeconds
+			if m.Spec.Deletion.NodeDeletionTimeoutSeconds == nil { // Don't overwrite default NodeDeletionTimeoutSeconds added by the webhook
+				m.Spec.Deletion.NodeDeletionTimeoutSeconds = ptr.To[int32](10)
+			}
 			m.Spec.Deletion.NodeVolumeDetachTimeoutSeconds = machineSet.Spec.Template.Spec.Deletion.NodeVolumeDetachTimeoutSeconds
 			m.Spec.MinReadySeconds = machineSet.Spec.Template.Spec.MinReadySeconds
 			m.Spec.Taints = machineSet.Spec.Template.Spec.Taints
@@ -1187,7 +1194,7 @@ func (r *Reconciler) computeDesiredMachine(machineSet *clusterv1.MachineSet, exi
 
 // updateLabelsAndAnnotations updates the external object passed in with the
 // updated labels and annotations from the MachineSet.
-func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj client.Object, machineSet *clusterv1.MachineSet) error {
+func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstructured.Unstructured, machineSet *clusterv1.MachineSet) error {
 	updatedObject := &unstructured.Unstructured{}
 	updatedObject.SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
 	updatedObject.SetNamespace(obj.GetNamespace())
@@ -1199,8 +1206,111 @@ func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj client.
 	updatedObject.SetLabels(machineLabelsFromMachineSet(machineSet))
 	updatedObject.SetAnnotations(machineAnnotationsFromMachineSet(machineSet))
 
+	currentPartialObjectMetadata := &metav1.PartialObjectMetadata{}
+	currentPartialObjectMetadata.SetGroupVersionKind(obj.GroupVersionKind())
+	managedFields := []metav1.ManagedFieldsEntry{}
+	for _, mf := range obj.GetManagedFields() {
+		if mf.Manager == machineSetMetadataManagerName && mf.Operation == metav1.ManagedFieldsOperationApply && mf.Subresource == "" {
+			managedFields = append(managedFields, mf)
+			break
+		}
+	}
+	currentPartialObjectMetadata.SetManagedFields(managedFields)
+	currentPartialObjectMetadata.SetLabels(obj.GetLabels())
+	currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+
+	currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
+	currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
+	err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+	if err != nil {
+		return err // FIXME: decide what to do on errors
+	}
+
+	if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
+		maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
+		return nil
+	}
+
 	return ssa.Patch(ctx, r.Client, machineSetMetadataManagerName, updatedObject, ssa.WithCachingProxy{Cache: r.ssaCache, Original: obj})
 }
+
+var parserOnce sync.Once
+var parser *typed.Parser
+
+func Parser() *typed.Parser {
+	parserOnce.Do(func() {
+		var err error
+		parser, err = typed.NewParser(schemaYAML)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to parse schema: %v", err))
+		}
+	})
+	return parser
+}
+
+var schemaYAML = typed.YAMLObject(`types:
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+  map:
+    fields:
+    - name: annotations
+      type:
+        map:
+          elementType:
+            scalar: string
+    - name: labels
+      type:
+        map:
+          elementType:
+            scalar: string
+    - name: managedFields
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ManagedFieldsEntry
+          elementRelationship: atomic
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.ManagedFieldsEntry
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_deduced_
+    elementRelationship: separable
+- name: __untyped_atomic_
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+- name: __untyped_deduced_
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_deduced_
+    elementRelationship: separable
+`)
 
 func (r *Reconciler) getOwnerMachineDeployment(ctx context.Context, machineSet *clusterv1.MachineSet) (*clusterv1.MachineDeployment, error) {
 	mdName := machineSet.Labels[clusterv1.MachineDeploymentNameLabel]

@@ -74,8 +74,12 @@ func (src *Cluster) ConvertTo(dstRaw conversion.Hub) error {
 	}
 
 	dst.Spec.Topology.ControlPlane.HealthCheck.Checks.UnhealthyMachineConditions = restored.Spec.Topology.ControlPlane.HealthCheck.Checks.UnhealthyMachineConditions
-	for i, md := range restored.Spec.Topology.Workers.MachineDeployments {
-		dst.Spec.Topology.Workers.MachineDeployments[i].HealthCheck.Checks.UnhealthyMachineConditions = md.HealthCheck.Checks.UnhealthyMachineConditions
+	for _, restoredMD := range restored.Spec.Topology.Workers.MachineDeployments {
+		for i, dstMD := range dst.Spec.Topology.Workers.MachineDeployments {
+			if restoredMD.Name == dstMD.Name {
+				dst.Spec.Topology.Workers.MachineDeployments[i].HealthCheck.Checks.UnhealthyMachineConditions = restoredMD.HealthCheck.Checks.UnhealthyMachineConditions
+			}
+		}
 	}
 
 	// Recover intent for bool values converted to *bool.

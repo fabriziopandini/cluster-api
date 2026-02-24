@@ -158,12 +158,6 @@ func (h *Helper) Patch(ctx context.Context, obj client.Object, opts ...Option) e
 		}
 	}
 
-	// Calculate and store the top-level field changes (e.g. "metadata", "spec", "status") we have before/after.
-	h.changes, err = h.calculateChanges(obj)
-	if err != nil {
-		return errors.Wrapf(err, "failed to patch %s %s", h.gvk.Kind, klog.KObj(h.beforeObject))
-	}
-
 	// Issue patches and return errors in an aggregate.
 	var errs []error
 	// Patch the conditions first.
@@ -174,6 +168,13 @@ func (h *Helper) Patch(ctx context.Context, obj client.Object, opts ...Option) e
 	if err := h.patchStatusConditions(ctx, obj, options.ForceOverwriteConditions, options.OwnedConditions, options.OwnedV1Beta2Conditions); err != nil {
 		errs = append(errs, errors.Wrapf(err, "failed to patch status conditions"))
 	}
+
+	// Calculate and store the top-level field changes (e.g. "metadata", "spec", "status") we have before/after.
+	h.changes, err = h.calculateChanges()
+	if err != nil {
+		return errors.Wrapf(err, "failed to patch %s %s", h.gvk.Kind, klog.KObj(h.beforeObject))
+	}
+
 	// Then proceed to patch the rest of the object.
 	if err := h.patch(ctx, obj); err != nil {
 		errs = append(errs, errors.Wrapf(err, "failed to patch spec and metadata"))
@@ -391,10 +392,18 @@ func (h *Helper) shouldPatch(focus patchType) bool {
 
 // calculate changes tries to build a patch from the before/after objects we have
 // and store in a map which top-level fields (e.g. `metadata`, `spec`, `status`, etc.) have changed.
-func (h *Helper) calculateChanges(after client.Object) (sets.Set[string], error) {
-	// Calculate patch data.
-	patch := client.MergeFrom(h.beforeObject)
-	diff, err := patch.Data(after)
+func (h *Helper) calculateChanges() (sets.Set[string], error) {
+	if len(h.clusterv1ConditionsFieldPath) > 0 {
+		unstructured.RemoveNestedField(h.before.Object, h.clusterv1ConditionsFieldPath...)
+		unstructured.RemoveNestedField(h.after.Object, h.clusterv1ConditionsFieldPath...)
+	}
+	if len(h.metav1ConditionsFieldPath) > 0 {
+		unstructured.RemoveNestedField(h.before.Object, h.metav1ConditionsFieldPath...)
+		unstructured.RemoveNestedField(h.after.Object, h.metav1ConditionsFieldPath...)
+	}
+	// FIXME: somehow shouldPatch told us there is a diff, but then later in client.Status().Patch() below there was no diff anymore. We should investigate and see if we can improve this here so that we don't apply empty patches (case was VSphereMachine.status.network: {})
+	patch := client.MergeFrom(h.before) // FIXME: ensure we don't call patchStatus if only conditions changed
+	diff, err := patch.Data(h.after)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to calculate patch data")
 	}

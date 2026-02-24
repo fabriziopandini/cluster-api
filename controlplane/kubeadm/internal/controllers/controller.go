@@ -864,6 +864,9 @@ func (r *KubeadmControlPlaneReconciler) syncMachines(ctx context.Context, contro
 			// Set all other in-place mutable fields that impact the ability to tear down existing machines.
 			m.Spec.Deletion.NodeDrainTimeoutSeconds = controlPlane.KCP.Spec.MachineTemplate.Spec.Deletion.NodeDrainTimeoutSeconds
 			m.Spec.Deletion.NodeDeletionTimeoutSeconds = controlPlane.KCP.Spec.MachineTemplate.Spec.Deletion.NodeDeletionTimeoutSeconds
+			if m.Spec.Deletion.NodeDeletionTimeoutSeconds == nil { // Don't overwrite default NodeDeletionTimeoutSeconds added by the webhook
+				m.Spec.Deletion.NodeDeletionTimeoutSeconds = ptr.To[int32](10)
+			}
 			m.Spec.Deletion.NodeVolumeDetachTimeoutSeconds = controlPlane.KCP.Spec.MachineTemplate.Spec.Deletion.NodeVolumeDetachTimeoutSeconds
 			m.Spec.Taints = controlPlane.KCP.Spec.MachineTemplate.Spec.Taints
 
