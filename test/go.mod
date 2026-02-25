@@ -4,6 +4,8 @@ go 1.25.0
 
 replace sigs.k8s.io/cluster-api => ../
 
+replace sigs.k8s.io/controller-runtime => ../../controller-runtime
+
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/docker/docker v28.5.2+incompatible

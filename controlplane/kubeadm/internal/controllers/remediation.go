@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/etcd/util"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/internal/contract"
+	clientutil "sigs.k8s.io/cluster-api/internal/util/client"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -371,6 +372,10 @@ func (r *KubeadmControlPlaneReconciler) reconcileUnhealthyMachines(ctx context.C
 	annotations.AddAnnotations(controlPlane.KCP, map[string]string{
 		controlplanev1.RemediationInProgressAnnotation: remediationInProgressValue,
 	})
+
+	if err := clientutil.WaitForObjectsToBeDeletedFromTheCache(ctx, r.Client, "Machine deletion (remediating unhealthy Machine)", machineToBeRemediated); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{RequeueAfter: time.Millisecond}, nil // Technically there is no need to requeue here. Machine deletion above triggers reconciliation. But we have to return a non-zero Result so reconcile above returns.
 }

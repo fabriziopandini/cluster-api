@@ -306,7 +306,7 @@ func (r *KubeadmControlPlaneReconciler) initControlPlaneScope(ctx context.Contex
 	}
 
 	// Read control plane machines
-	controlPlaneMachines, err := r.managementClusterUncached.GetMachinesForCluster(ctx, cluster, collections.ControlPlaneMachines(cluster.Name))
+	controlPlaneMachines, err := r.managementCluster.GetMachinesForCluster(ctx, cluster, collections.ControlPlaneMachines(cluster.Name))
 	if err != nil {
 		log.Error(err, "Failed to retrieve control plane machines for cluster")
 		return nil, false, err
