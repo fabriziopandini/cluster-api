@@ -19,9 +19,11 @@ package machineset
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -61,6 +63,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/util/ssa"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
+	acclusterv1 "sigs.k8s.io/cluster-api/util/applyconfigurations/core/v1beta2/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/collections"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
@@ -693,12 +696,32 @@ func (r *Reconciler) syncMachines(ctx context.Context, s *scope) (ctrl.Result, b
 			if err != nil {
 				return ctrl.Result{}, true, errors.Wrap(err, "failed to update Machine: failed to compute desired Machine")
 			}
-			err = ssa.Patch(ctx, r.Client, machineSetManagerName, updatedMachine, ssa.WithCachingProxy{Cache: r.ssaCache, Original: m})
+
+			updatedMachineApplyConfiguration := &acclusterv1.MachineApplyConfiguration{}
+			updatedMachineBytes, err := json.Marshal(updatedMachine)
 			if err != nil {
-				log.Error(err, "Failed to update Machine", "Machine", klog.KObj(updatedMachine))
-				return ctrl.Result{}, true, errors.Wrapf(err, "failed to update Machine %q", klog.KObj(updatedMachine))
+				return ctrl.Result{}, true, err
 			}
-			machines[i] = updatedMachine
+			if err := json.Unmarshal(updatedMachineBytes, updatedMachineApplyConfiguration); err != nil {
+				return ctrl.Result{}, true, err
+			}
+
+			currentMachineApplyConfiguration, err := acclusterv1.ExtractMachine(m, machineSetManagerName)
+			if err != nil {
+				return ctrl.Result{}, true, err // FIXME: decide what to do on errors
+			}
+			currentMachineApplyConfiguration.UID = ptr.To(m.UID) // FIXME: why does Extract not set UID? (probably no ownership, but we need it in updateMachine)
+
+			if !reflect.DeepEqual(currentMachineApplyConfiguration, updatedMachineApplyConfiguration) {
+				err = ssa.Patch(ctx, r.Client, machineSetManagerName, updatedMachine, ssa.WithCachingProxy{Cache: r.ssaCache, Original: m})
+				if err != nil {
+					log.Error(err, "Failed to update Machine", "Machine", klog.KObj(updatedMachine))
+					return ctrl.Result{}, true, errors.Wrapf(err, "failed to update Machine %q", klog.KObj(updatedMachine))
+				}
+				machines[i] = updatedMachine
+			} else {
+				machines[i] = m
+			}
 		}
 
 		infraMachine, err := external.GetObjectFromContractVersionedRef(ctx, r.Client, m.Spec.InfrastructureRef, m.Namespace)
@@ -1194,7 +1217,7 @@ func (r *Reconciler) computeDesiredMachine(machineSet *clusterv1.MachineSet, exi
 
 // updateLabelsAndAnnotations updates the external object passed in with the
 // updated labels and annotations from the MachineSet.
-func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstructured.Unstructured, machineSet *clusterv1.MachineSet) error {
+func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstructured.Unstructured, machineSet *clusterv1.MachineSet) error { // FIXME: consider moving this func into the ssa package and reuse with KCP
 	updatedObject := &unstructured.Unstructured{}
 	updatedObject.SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
 	updatedObject.SetNamespace(obj.GetNamespace())
@@ -1215,20 +1238,22 @@ func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstru
 			break
 		}
 	}
-	currentPartialObjectMetadata.SetManagedFields(managedFields)
-	currentPartialObjectMetadata.SetLabels(obj.GetLabels())
-	currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+	if len(managedFields) > 0 {
+		currentPartialObjectMetadata.SetManagedFields(managedFields)
+		currentPartialObjectMetadata.SetLabels(obj.GetLabels())
+		currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
 
-	currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
-	currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
-	err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
-	if err != nil {
-		return err // FIXME: decide what to do on errors
-	}
+		currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
+		currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
+		err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+		if err != nil {
+			return err // FIXME: decide what to do on errors
+		}
 
-	if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
-		maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
-		return nil
+		if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
+			maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
+			return nil
+		}
 	}
 
 	return ssa.Patch(ctx, r.Client, machineSetMetadataManagerName, updatedObject, ssa.WithCachingProxy{Cache: r.ssaCache, Original: obj})

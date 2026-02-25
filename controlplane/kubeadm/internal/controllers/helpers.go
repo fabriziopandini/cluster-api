@@ -18,7 +18,12 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -27,8 +32,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/managedfields"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/structured-merge-diff/v6/typed"
 
 	bootstrapv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta2"
@@ -38,6 +46,7 @@ import (
 	"sigs.k8s.io/cluster-api/controlplane/kubeadm/internal/desiredstate"
 	"sigs.k8s.io/cluster-api/internal/util/ssa"
 	"sigs.k8s.io/cluster-api/util"
+	acclusterv1 "sigs.k8s.io/cluster-api/util/applyconfigurations/core/v1beta2/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/certs"
 	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
 	"sigs.k8s.io/cluster-api/util/kubeconfig"
@@ -301,8 +310,113 @@ func (r *KubeadmControlPlaneReconciler) updateLabelsAndAnnotations(ctx context.C
 	updatedObject.SetLabels(desiredstate.ControlPlaneMachineLabels(kcp, cluster.Name))
 	updatedObject.SetAnnotations(desiredstate.ControlPlaneMachineAnnotations(kcp))
 
+	currentPartialObjectMetadata := &metav1.PartialObjectMetadata{}
+	currentPartialObjectMetadata.SetGroupVersionKind(objGVK)
+	managedFields := []metav1.ManagedFieldsEntry{}
+	for _, mf := range obj.GetManagedFields() {
+		if mf.Manager == kcpMetadataManagerName && mf.Operation == metav1.ManagedFieldsOperationApply && mf.Subresource == "" {
+			managedFields = append(managedFields, mf)
+			break
+		}
+	}
+	if len(managedFields) > 0 {
+		currentPartialObjectMetadata.SetManagedFields(managedFields)
+		currentPartialObjectMetadata.SetLabels(obj.GetLabels())
+		currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+
+		currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
+		currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(objGVK)
+		err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), kcpMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+		if err != nil {
+			return err // FIXME: decide what to do on errors
+		}
+
+		if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
+			maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
+			return nil
+		}
+	}
+
 	return ssa.Patch(ctx, r.Client, kcpMetadataManagerName, updatedObject, ssa.WithCachingProxy{Cache: r.ssaCache, Original: obj})
 }
+
+var parserOnce sync.Once
+var parser *typed.Parser
+
+func Parser() *typed.Parser {
+	parserOnce.Do(func() {
+		var err error
+		parser, err = typed.NewParser(schemaYAML)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to parse schema: %v", err))
+		}
+	})
+	return parser
+}
+
+var schemaYAML = typed.YAMLObject(`types:
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+  map:
+    fields:
+    - name: annotations
+      type:
+        map:
+          elementType:
+            scalar: string
+    - name: labels
+      type:
+        map:
+          elementType:
+            scalar: string
+    - name: managedFields
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ManagedFieldsEntry
+          elementRelationship: atomic
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.ManagedFieldsEntry
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_deduced_
+    elementRelationship: separable
+- name: __untyped_atomic_
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+- name: __untyped_deduced_
+  scalar: untyped
+  list:
+    elementType:
+      namedType: __untyped_atomic_
+    elementRelationship: atomic
+  map:
+    elementType:
+      namedType: __untyped_deduced_
+    elementRelationship: separable
+`)
 
 func (r *KubeadmControlPlaneReconciler) createMachine(ctx context.Context, kcp *controlplanev1.KubeadmControlPlane, machine *clusterv1.Machine) error {
 	if err := ssa.Patch(ctx, r.Client, kcpManagerName, machine); err != nil {
@@ -320,9 +434,27 @@ func (r *KubeadmControlPlaneReconciler) updateMachine(ctx context.Context, machi
 		return nil, errors.Wrap(err, "failed to apply Machine")
 	}
 
-	err = ssa.Patch(ctx, r.Client, kcpManagerName, updatedMachine, ssa.WithCachingProxy{Cache: r.ssaCache, Original: machine})
+	updatedMachineApplyConfiguration := &acclusterv1.MachineApplyConfiguration{}
+	updatedMachineBytes, err := json.Marshal(updatedMachine)
 	if err != nil {
 		return nil, err
 	}
-	return updatedMachine, nil
+	if err := json.Unmarshal(updatedMachineBytes, updatedMachineApplyConfiguration); err != nil {
+		return nil, err
+	}
+
+	currentMachineApplyConfiguration, err := acclusterv1.ExtractMachine(machine, kcpManagerName)
+	if err != nil {
+		return nil, err // FIXME: decide what to do on errors
+	}
+	currentMachineApplyConfiguration.UID = ptr.To(machine.UID) // FIXME: why does Extract not set UID? (probably no ownership, but we need it in updateMachine)
+
+	if !reflect.DeepEqual(currentMachineApplyConfiguration, updatedMachineApplyConfiguration) {
+		err = ssa.Patch(ctx, r.Client, kcpManagerName, updatedMachine, ssa.WithCachingProxy{Cache: r.ssaCache, Original: machine})
+		if err != nil {
+			return nil, err
+		}
+		return updatedMachine, nil
+	}
+	return machine, nil
 }

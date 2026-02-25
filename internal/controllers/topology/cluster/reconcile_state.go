@@ -18,7 +18,9 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -49,6 +51,7 @@ import (
 	"sigs.k8s.io/cluster-api/internal/topology/ownerrefs"
 	clientutil "sigs.k8s.io/cluster-api/internal/util/client"
 	"sigs.k8s.io/cluster-api/util"
+	acclusterv1 "sigs.k8s.io/cluster-api/util/applyconfigurations/core/v1beta2/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/cache"
 )
 
@@ -474,6 +477,23 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 	log = log.WithValues("MachineHealthCheck", klog.KObj(current))
 	ctx = ctrl.LoggerInto(ctx, log)
 
+	updatedMachineHealthCheckApplyConfiguration := &acclusterv1.MachineHealthCheckApplyConfiguration{}
+	updatedMachineHealthCheckBytes, err := json.Marshal(desired)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(updatedMachineHealthCheckBytes, updatedMachineHealthCheckApplyConfiguration); err != nil {
+		return err
+	}
+	currentMachineHealthCheckApplyConfiguration, err := acclusterv1.ExtractMachineHealthCheck(current, structuredmerge.TopologyManagerName)
+	if err != nil {
+		return err // FIXME: decide what to do on errors
+	}
+	if reflect.DeepEqual(updatedMachineHealthCheckApplyConfiguration, currentMachineHealthCheckApplyConfiguration) {
+		log.V(3).Info("No changes for MachineHealthCheck (based on ApplyConfiguration comparison)")
+		return nil
+	}
+
 	// Check differences between current and desired MachineHealthChecks, and patch if required.
 	// NOTE: we want to be authoritative on the entire spec because the users are
 	// expected to change MHC fields from the ClusterClass only.
@@ -499,38 +519,31 @@ func (r *Reconciler) reconcileMachineHealthCheck(ctx context.Context, current, d
 // most specifically, after a Cluster is created it is assumed that the reference to the InfrastructureCluster /
 // ControlPlane objects should never change (only the content of the objects can change).
 func (r *Reconciler) reconcileCluster(ctx context.Context, s *scope.Scope) error {
-	log := ctrl.LoggerFrom(ctx)
+	// FIXME: This needs proper cleanup of previous capi-topology managedFields
+	cluster := s.Current.Cluster.DeepCopy()
+	original := cluster.DeepCopy()
 
-	// Check differences between current and desired state, and eventually patch the current object.
-	patchHelper, err := structuredmerge.NewServerSidePatchHelper(ctx, s.Current.Cluster, s.Desired.Cluster, r.Client, r.ssaCache)
-	if err != nil {
-		return errors.Wrapf(err, "failed to create patch helper for Cluster %s", klog.KObj(s.Current.Cluster))
+	if cluster.Labels == nil {
+		cluster.Labels = map[string]string{}
 	}
-	if !patchHelper.HasChanges() {
-		log.V(3).Info("No changes for Cluster")
+	cluster.Labels[clusterv1.ClusterNameLabel] = s.Desired.Cluster.Labels[clusterv1.ClusterNameLabel]
+	cluster.Labels[clusterv1.ClusterTopologyOwnedLabel] = s.Desired.Cluster.Labels[clusterv1.ClusterTopologyOwnedLabel]
+	if cluster.Annotations == nil {
+		cluster.Annotations = map[string]string{}
+	}
+	// FIXME: we should not set the empty annotation if not necessary (also cleanup desired_state.go computeCluster)
+	cluster.Annotations[clusterv1.ClusterTopologyUpgradeStepAnnotation] = s.Desired.Cluster.Annotations[clusterv1.ClusterTopologyUpgradeStepAnnotation]
+	cluster.Spec.InfrastructureRef = s.Desired.Cluster.Spec.InfrastructureRef
+	cluster.Spec.ControlPlaneRef = s.Desired.Cluster.Spec.ControlPlaneRef
+
+	if reflect.DeepEqual(cluster, original) {
 		return nil
 	}
 
-	diff := patchHelper.Diff()
-	patchData := patchHelper.PatchData()
-	if diff == "" && patchData == "" {
-		log.Info("Patching Cluster")
-	} else {
-		log.Info("Patching Cluster", "diff", diff, "patch", patchData)
+	if err := r.Client.Patch(ctx, cluster, client.MergeFrom(original)); err != nil {
+		return err
 	}
-	modifiedResourceVersion, err := patchHelper.Patch(ctx)
-	if err != nil {
-		return errors.Wrapf(err, "failed to patch Cluster %s", klog.KObj(s.Current.Cluster))
-	}
-	r.recorder.Eventf(s.Current.Cluster, corev1.EventTypeNormal, updateEventReason, "Updated Cluster %q", klog.KObj(s.Current.Cluster))
-
-	// Wait until Cluster is updated in the cache.
-	// Note: We have to do this because otherwise using a cached client in the Reconcile func could
-	// return a stale state of the Cluster we just patched (because the cache might be stale).
-	// Note: Using DeepCopy to not modify s.Current.Cluster as it's not trivial to figure out what impact that would have.
-	cluster := s.Current.Cluster.DeepCopy()
-	cluster.ResourceVersion = modifiedResourceVersion
-	return clientutil.WaitForCacheToBeUpToDate(ctx, r.Client, "Cluster update", cluster)
+	return nil
 }
 
 // reconcileMachineDeployments reconciles the desired state of the MachineDeployment objects.
@@ -781,6 +794,23 @@ func (r *Reconciler) updateMachineDeployment(ctx context.Context, s *scope.Scope
 				bootstrapLog.Error(err, "WARNING! Failed to cleanup BootstrapTemplate for MachineDeployment while handling update error. The object will be garbage collected when the cluster is deleted.")
 			}
 		}
+	}
+
+	updatedMachineDeploymentApplyConfiguration := &acclusterv1.MachineDeploymentApplyConfiguration{}
+	updatedMachineDeploymentBytes, err := json.Marshal(desiredMD.Object)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(updatedMachineDeploymentBytes, updatedMachineDeploymentApplyConfiguration); err != nil {
+		return err
+	}
+	currentMachineDeploymentApplyConfiguration, err := acclusterv1.ExtractMachineDeployment(currentMD.Object, structuredmerge.TopologyManagerName)
+	if err != nil {
+		return err // FIXME: decide what to do on errors
+	}
+	if reflect.DeepEqual(updatedMachineDeploymentApplyConfiguration, currentMachineDeploymentApplyConfiguration) {
+		log.V(3).Info("No changes for MachineDeployment (based on ApplyConfiguration comparison)")
+		return nil
 	}
 
 	// Check differences between current and desired MachineDeployment, and eventually patch the current object.

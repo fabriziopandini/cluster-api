@@ -373,10 +373,16 @@ func (r *KubeadmConfigReconciler) refreshBootstrapTokenIfNeeded(ctx context.Cont
 
 	secret, err := getToken(ctx, remoteClient, token)
 	if err != nil {
-		if apierrors.IsNotFound(err) && scope.ConfigOwner.IsMachinePool() {
-			log.Info("Bootstrap token secret not found, triggering creation of new token")
-			config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = ""
-			return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
+		if apierrors.IsNotFound(err) {
+			if scope.ConfigOwner.IsMachinePool() {
+				log.Info("Bootstrap token secret not found, triggering creation of new token")
+				config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = ""
+				return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
+			} else { // FIXME: this fails with regular Machines if the secret gets lost in the wl cluster
+				log.Info("Bootstrap token secret not found, triggering creation of new token")
+				config.Spec.JoinConfiguration.Discovery.BootstrapToken.Token = ""
+				return r.recreateBootstrapToken(ctx, config, scope, remoteClient)
+			}
 		}
 		return ctrl.Result{}, errors.Wrapf(err, "failed to get bootstrap token secret in order to refresh it")
 	}

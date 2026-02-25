@@ -766,6 +766,8 @@ func createClusterWorker(ctx context.Context, clusterProxy framework.ClusterProx
 							IgnoreAlreadyExists: true,
 							Labels:              map[string]string{"e2e-test": specName},
 						}, "40s", "10s")
+					} else {
+						return false // Skipping this namespace/cluster if the namespace already exists
 					}
 				}
 

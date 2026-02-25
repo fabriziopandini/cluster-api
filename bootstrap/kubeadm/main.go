@@ -235,6 +235,7 @@ func main() {
 
 	ctrlOptions := ctrl.Options{
 		Controller: config.Controller{
+			CacheSyncTimeout: 10 * time.Minute, // FIXME
 			UsePriorityQueue: ptr.To[bool](feature.Gates.Enabled(feature.PriorityQueue)),
 		},
 		Scheme:                     scheme,

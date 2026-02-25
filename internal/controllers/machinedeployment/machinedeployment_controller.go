@@ -18,7 +18,9 @@ package machinedeployment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -44,6 +46,7 @@ import (
 	clientutil "sigs.k8s.io/cluster-api/internal/util/client"
 	"sigs.k8s.io/cluster-api/internal/util/ssa"
 	"sigs.k8s.io/cluster-api/util"
+	acclusterv1 "sigs.k8s.io/cluster-api/util/applyconfigurations/core/v1beta2/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/cache"
 	"sigs.k8s.io/cluster-api/util/collections"
 	v1beta1conditions "sigs.k8s.io/cluster-api/util/conditions/deprecated/v1beta1"
@@ -399,48 +402,71 @@ func (r *Reconciler) createOrUpdateMachineSetsAndSyncMachineDeploymentRevision(c
 			continue
 		}
 
-		// Add to the log kv pairs providing context and details about changes in this MachineSet (reason, diff)
-		// Note: Those values should not be added to the context to prevent propagation to other func.
-		statusToLogKeyAndValues := []any{
-			"reason", diff.Reason,
-			"diff", diff.OtherChanges,
-		}
-		if len(p.acknowledgedMachineNames) > 0 {
-			statusToLogKeyAndValues = append(statusToLogKeyAndValues, "acknowledgedMachines", sortAndJoin(p.acknowledgedMachineNames))
-		}
-		if len(p.updatingMachineNames) > 0 {
-			statusToLogKeyAndValues = append(statusToLogKeyAndValues, "updatingMachines", sortAndJoin(p.updatingMachineNames))
-		}
-		log = log.WithValues(statusToLogKeyAndValues...)
-
-		err := ssa.Patch(ctx, r.Client, machineDeploymentManagerName, ms, ssa.WithCachingProxy{Cache: r.ssaCache, Original: diff.OriginalMS})
+		updatedMachineSetApplyConfiguration := &acclusterv1.MachineSetApplyConfiguration{}
+		updatedMachineSetBytes, err := json.Marshal(ms)
 		if err != nil {
-			// Note: If we are Applying a MachineSet with UID set and the MachineSet does not exist anymore, the
-			// kube-apiserver returns a conflict error.
-			if (apierrors.IsConflict(err) || apierrors.IsNotFound(err)) && !ms.DeletionTimestamp.IsZero() {
-				continue
-			}
-			r.recorder.Eventf(p.md, corev1.EventTypeWarning, "FailedUpdate", "Failed to update MachineSet %s: %v", klog.KObj(ms), err)
-			return errors.Wrapf(err, "failed to update MachineSet %s", klog.KObj(ms))
+			return err
 		}
+		if err := json.Unmarshal(updatedMachineSetBytes, updatedMachineSetApplyConfiguration); err != nil {
+			return err
+		}
+		updatedMachineSetApplyConfiguration.Status = nil            // FIXME: Cleanup status, not sure why there is a status in the first place
+		updatedMachineSetApplyConfiguration.CreationTimestamp = nil // cleanup creationTimestamp as it is not present incurrentMachineSetApplyConfiguration
+		updatedMachineSetApplyConfiguration.Finalizers = nil        // cleanup creationTimestamp, we sort of adopt it today, maybe we should stop doing that?
 
-		if diff.DesiredReplicas < diff.OriginalReplicas {
-			log.Info(fmt.Sprintf("Scaled down %s MachineSet %s from %d to %d replicas (-%d)", diff.Type, ms.Name, diff.OriginalReplicas, diff.DesiredReplicas, diff.OriginalReplicas-diff.DesiredReplicas))
-			r.recorder.Eventf(p.md, corev1.EventTypeNormal, "SuccessfulScale", "Scaled down MachineSet %v: %d -> %d", ms.Name, diff.OriginalReplicas, diff.DesiredReplicas)
+		currentMachineSetApplyConfiguration, err := acclusterv1.ExtractMachineSet(diff.OriginalMS, machineDeploymentManagerName)
+		if err != nil {
+			return err // FIXME: decide what to do on errors
 		}
-		if diff.DesiredReplicas > diff.OriginalReplicas {
-			log.Info(fmt.Sprintf("Scaled up %s MachineSet %s from %d to %d replicas (+%d)", diff.Type, ms.Name, diff.OriginalReplicas, diff.DesiredReplicas, diff.DesiredReplicas-diff.OriginalReplicas))
-			r.recorder.Eventf(p.md, corev1.EventTypeNormal, "SuccessfulScale", "Scaled up MachineSet %v: %d -> %d", ms.Name, diff.OriginalReplicas, diff.DesiredReplicas)
-		}
-		if diff.DesiredReplicas == diff.OriginalReplicas && diff.OtherChanges != "" {
-			log.Info(fmt.Sprintf("Updated %s MachineSet %s", diff.Type, ms.Name))
-		}
+		currentMachineSetApplyConfiguration.UID = ptr.To(diff.OriginalMS.UID) // FIXME: why does Extract not set UID? (probably no ownership, but we need it in updateMachine)
+		currentMachineSetApplyConfiguration.Finalizers = nil                  // cleanup creationTimestamp, we sort of adopt it today, maybe we should stop doing that?
 
-		// Only wait for cache if the object was changed.
-		if diff.OriginalMS.ResourceVersion != ms.ResourceVersion {
-			if err := clientutil.WaitForCacheToBeUpToDate(ctx, r.Client, "MachineSet update", ms); err != nil {
-				return err
+		if !reflect.DeepEqual(currentMachineSetApplyConfiguration, updatedMachineSetApplyConfiguration) {
+			// Add to the log kv pairs providing context and details about changes in this MachineSet (reason, diff)
+			// Note: Those values should not be added to the context to prevent propagation to other func.
+			statusToLogKeyAndValues := []any{
+				"reason", diff.Reason,
+				"diff", diff.OtherChanges,
 			}
+			if len(p.acknowledgedMachineNames) > 0 {
+				statusToLogKeyAndValues = append(statusToLogKeyAndValues, "acknowledgedMachines", sortAndJoin(p.acknowledgedMachineNames))
+			}
+			if len(p.updatingMachineNames) > 0 {
+				statusToLogKeyAndValues = append(statusToLogKeyAndValues, "updatingMachines", sortAndJoin(p.updatingMachineNames))
+			}
+			log = log.WithValues(statusToLogKeyAndValues...)
+
+			err := ssa.Patch(ctx, r.Client, machineDeploymentManagerName, ms, ssa.WithCachingProxy{Cache: r.ssaCache, Original: diff.OriginalMS})
+			if err != nil {
+				// Note: If we are Applying a MachineSet with UID set and the MachineSet does not exist anymore, the
+				// kube-apiserver returns a conflict error.
+				if (apierrors.IsConflict(err) || apierrors.IsNotFound(err)) && !ms.DeletionTimestamp.IsZero() {
+					continue
+				}
+				r.recorder.Eventf(p.md, corev1.EventTypeWarning, "FailedUpdate", "Failed to update MachineSet %s: %v", klog.KObj(ms), err)
+				return errors.Wrapf(err, "failed to update MachineSet %s", klog.KObj(ms))
+			}
+
+			if diff.DesiredReplicas < diff.OriginalReplicas {
+				log.Info(fmt.Sprintf("Scaled down %s MachineSet %s from %d to %d replicas (-%d)", diff.Type, ms.Name, diff.OriginalReplicas, diff.DesiredReplicas, diff.OriginalReplicas-diff.DesiredReplicas))
+				r.recorder.Eventf(p.md, corev1.EventTypeNormal, "SuccessfulScale", "Scaled down MachineSet %v: %d -> %d", ms.Name, diff.OriginalReplicas, diff.DesiredReplicas)
+			}
+			if diff.DesiredReplicas > diff.OriginalReplicas {
+				log.Info(fmt.Sprintf("Scaled up %s MachineSet %s from %d to %d replicas (+%d)", diff.Type, ms.Name, diff.OriginalReplicas, diff.DesiredReplicas, diff.DesiredReplicas-diff.OriginalReplicas))
+				r.recorder.Eventf(p.md, corev1.EventTypeNormal, "SuccessfulScale", "Scaled up MachineSet %v: %d -> %d", ms.Name, diff.OriginalReplicas, diff.DesiredReplicas)
+			}
+			if diff.DesiredReplicas == diff.OriginalReplicas && diff.OtherChanges != "" {
+				log.Info(fmt.Sprintf("Updated %s MachineSet %s", diff.Type, ms.Name))
+			}
+
+			// Only wait for cache if the object was changed.
+			if diff.OriginalMS.ResourceVersion != ms.ResourceVersion {
+				if err := clientutil.WaitForCacheToBeUpToDate(ctx, r.Client, "MachineSet update", ms); err != nil {
+					return err
+				}
+			}
+		} else {
+			log.V(10).Info("No-op, just for test purposes for now")
 		}
 	}
 

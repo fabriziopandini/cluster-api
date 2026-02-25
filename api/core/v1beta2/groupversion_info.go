@@ -26,6 +26,9 @@ var (
 	// GroupVersion is group version used to register these objects.
 	GroupVersion = schema.GroupVersion{Group: "cluster.x-k8s.io", Version: "v1beta2"}
 
+	// SchemeGroupVersion is an alias to GroupVersion, e.g. needed for applyconfigurations.
+	SchemeGroupVersion = GroupVersion
+
 	// schemeBuilder is used to add go types to the GroupVersionKind scheme.
 	schemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
 
