@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -72,8 +73,10 @@ import (
 	"sigs.k8s.io/cluster-api/internal/contract"
 	internalruntimeclient "sigs.k8s.io/cluster-api/internal/runtime/client"
 	runtimeregistry "sigs.k8s.io/cluster-api/internal/runtime/registry"
+	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/apiwarnings"
 	"sigs.k8s.io/cluster-api/util/flags"
+	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/cluster-api/version"
 )
 
@@ -287,6 +290,88 @@ func main() {
 	req, _ := labels.NewRequirement(clusterv1.ClusterNameLabel, selection.Exists, nil)
 	clusterSecretCacheSelector := labels.NewSelector().Add(*req)
 
+	req, _ = labels.NewRequirement(clusterv1.MachineControlPlaneLabel, selection.Exists, nil)
+	controlPlaneMachineSelector := labels.NewSelector().Add(*req)
+
+	cacheOptions := cache.Options{
+		DefaultNamespaces: watchNamespaces,
+		SyncPeriod:        &syncPeriod,
+		ByObject: map[client.Object]cache.ByObject{
+			// Note: Only Secrets with the cluster name label are cached.
+			// The default client of the manager won't use the cache for secrets at all (see Client.Cache.DisableFor).
+			// The cached secrets will only be used by the secretCachingClient we create below.
+			&corev1.Secret{}: {
+				Label: clusterSecretCacheSelector,
+				// Drop data of secrets that we don't use.
+				Transform: func(in any) (any, error) {
+					if s, ok := in.(*corev1.Secret); ok {
+						s.SetManagedFields(nil)
+						if !secret.HasPurposeSuffix(s.Name) {
+							s.Data = nil
+						}
+					}
+					return in, nil
+				},
+			},
+			&clusterv1.Machine{}: {
+				// Drop data of worker Machines.
+				Transform: func(in any) (any, error) {
+					if m, ok := in.(*clusterv1.Machine); ok && !util.IsControlPlaneMachine(m) {
+						m.SetManagedFields(nil)
+						m.Spec = clusterv1.MachineSpec{}
+						m.Status = clusterv1.MachineStatus{}
+					}
+					return in, nil
+				},
+			},
+			&bootstrapv1.KubeadmConfig{}: {
+				// Only cache CP Machine KubeadmConfigs.
+				Label: controlPlaneMachineSelector,
+			},
+		},
+	}
+
+	infraMachineGVKs := []schema.GroupVersionKind{
+		{
+			Group:   "vmware.infrastructure.cluster.x-k8s.io",
+			Version: "v1beta2",
+			Kind:    "VSphereMachine",
+		},
+	}
+	for _, infraMachineGVK := range infraMachineGVKs {
+		im := &unstructured.Unstructured{}
+		im.SetGroupVersionKind(infraMachineGVK)
+		cacheOptions.ByObject[im] = cache.ByObject{
+			// Only cache CP Machine InfraMachines.
+			Label: controlPlaneMachineSelector,
+		}
+	}
+
+	infraMachineTemplateGVKs := []schema.GroupVersionKind{
+		{
+			Group:   "vmware.infrastructure.cluster.x-k8s.io",
+			Version: "v1beta2",
+			Kind:    "VSphereMachineTemplate",
+		},
+	}
+	for _, infraMachineTemplateGVK := range infraMachineTemplateGVKs {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(infraMachineTemplateGVK)
+		cacheOptions.ByObject[u] = cache.ByObject{
+			// Drop data of MD InfraMachineTemplates.
+			Transform: func(in any) (any, error) {
+				if imt, ok := in.(*unstructured.Unstructured); ok {
+					imt.SetManagedFields(nil)
+					if _, ok := imt.GetLabels()[clusterv1.ClusterTopologyMachineDeploymentNameLabel]; ok {
+						delete(imt.Object, "spec")
+						delete(imt.Object, "status")
+					}
+				}
+				return in, nil
+			},
+		}
+	}
+
 	ctrlOptions := ctrl.Options{
 		Controller: config.Controller{
 			CacheSyncTimeout: 10 * time.Minute, // FIXME
@@ -302,18 +387,7 @@ func main() {
 		HealthProbeBindAddress:     healthAddr,
 		PprofBindAddress:           profilerAddress,
 		Metrics:                    *metricsOptions,
-		Cache: cache.Options{
-			DefaultNamespaces: watchNamespaces,
-			SyncPeriod:        &syncPeriod,
-			ByObject: map[client.Object]cache.ByObject{
-				// Note: Only Secrets with the cluster name label are cached.
-				// The default client of the manager won't use the cache for secrets at all (see Client.Cache.DisableFor).
-				// The cached secrets will only be used by the secretCachingClient we create below.
-				&corev1.Secret{}: {
-					Label: clusterSecretCacheSelector,
-				},
-			},
-		},
+		Cache:                      cacheOptions,
 		Client: client.Options{
 			Cache: &client.CacheOptions{
 				DisableFor: []client.Object{
@@ -402,7 +476,27 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager) {
 					Namespaces: map[string]cache.Config{
 						metav1.NamespaceSystem: {
 							LabelSelector: podSelector,
+							Transform: func(in any) (any, error) {
+								if p, ok := in.(*corev1.Pod); ok {
+									p.SetManagedFields(nil)
+									p.Spec = corev1.PodSpec{}
+								}
+								return in, nil
+							},
 						},
+					},
+				},
+				&corev1.Node{}: {
+					Transform: func(in any) (any, error) {
+						if n, ok := in.(*corev1.Node); ok {
+							n.SetManagedFields(nil)
+							n.Spec = corev1.NodeSpec{
+								ProviderID: n.Spec.ProviderID,
+								Taints:     n.Spec.Taints,
+							}
+							n.Status = corev1.NodeStatus{}
+						}
+						return in, nil
 					},
 				},
 			},
