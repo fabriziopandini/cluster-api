@@ -107,7 +107,7 @@ func dryRunSSAPatch(ctx context.Context, dryRunCtx *dryRunSSAPatchInput) (bool, 
 	// error: "the object has been modified; please apply your changes to the latest version and try again"
 	ssa.FilterObject(dryRunCtx.originalUnstructured, filterObjectInput)
 	// Backup managed fields.
-	originalUnstructuredManagedFieldsBeforeSSA := dryRunCtx.originalUnstructured.GetManagedFields()
+	originalUnstructuredManagedFieldsBeforeSSA := dryRunCtx.originalUnstructured.GetManagedFields() // FIXME use util instead
 	// Set managed fields to nil.
 	// Note: Otherwise we would get the following error:
 	// "failed to request dry-run server side apply: metadata.managedFields must be nil"
@@ -237,7 +237,7 @@ func cleanupManagedFieldsAndAnnotation(obj *unstructured.Unstructured) error {
 
 	// Adjust the managed field for Manager=TopologyManagerName, Subresource="", Operation="Apply" and
 	// drop managed fields of other controllers.
-	oldManagedFields := obj.GetManagedFields()
+	oldManagedFields := obj.GetManagedFields() // FIXME use util instead
 	newManagedFields := []metav1.ManagedFieldsEntry{}
 	for _, managedField := range oldManagedFields {
 		if managedField.Manager != TopologyManagerName {

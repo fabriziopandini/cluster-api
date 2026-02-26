@@ -331,6 +331,7 @@ func main() {
 		},
 	}
 
+	// FIXME: Instead of using a command-line arg here we can consider starting caches dynamically on demand and then specify the cache configuration there
 	infraMachineGVKs := []schema.GroupVersionKind{
 		{
 			Group:   "vmware.infrastructure.cluster.x-k8s.io",

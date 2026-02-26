@@ -23,6 +23,7 @@ import (
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -88,7 +89,19 @@ func MitigateManagedFieldsIssue(ctx context.Context, c client.Client, obj client
 		return false, nil
 	}
 
-	if len(obj.GetManagedFields()) > 0 && !slices.ContainsFunc(obj.GetManagedFields(), isManager(beforeFirstApplyManager)) {
+	var managedFields []metav1.ManagedFieldsEntry
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		var err error
+		managedFields, err = GetUnstructuredManagedFields(u, "")
+		if err != nil {
+			return false, err
+		}
+	} else {
+		managedFields = obj.GetManagedFields()
+	}
+
+	// FIXME: write a special efficient func to detect this case as it is the only thing we do in 99% of the cases
+	if len(managedFields) > 0 && !slices.ContainsFunc(managedFields, isManager(beforeFirstApplyManager)) {
 		// Return if object has managedFields and no before-first-apply entry.
 		return false, nil
 	}
@@ -100,10 +113,10 @@ func MitigateManagedFieldsIssue(ctx context.Context, c client.Client, obj client
 	}
 
 	// Remove before-first-apply entry if it exists.
-	managedFields := slices.DeleteFunc(obj.GetManagedFields(), isManager(beforeFirstApplyManager))
+	managedFields = slices.DeleteFunc(managedFields, isManager(beforeFirstApplyManager))
 
 	// Add fieldManager entry if it does not exist.
-	if !slices.ContainsFunc(obj.GetManagedFields(), isManager(fieldManager)) {
+	if !slices.ContainsFunc(managedFields, isManager(fieldManager)) {
 		fieldsV1, err := computeManagedFields(obj, objGVK)
 		if err != nil {
 			return false, errors.Wrapf(err, "failed to mitigate managedFields issue: failed to compute managedFields entry")

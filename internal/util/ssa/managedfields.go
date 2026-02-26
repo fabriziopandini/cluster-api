@@ -75,7 +75,16 @@ func RemoveManagedFieldsForLabelsAndAnnotations(ctx context.Context, c client.Cl
 		base := object.DeepCopyObject().(client.Object)
 
 		// Modify managedFields for manager=fieldManager and operation=Apply to drop ownership for labels and annotations.
-		originalManagedFields := object.GetManagedFields()
+		var originalManagedFields []metav1.ManagedFieldsEntry
+		if u, ok := object.(*unstructured.Unstructured); ok {
+			originalManagedFields, err = GetUnstructuredManagedFields(u, "")
+			if err != nil {
+				return err
+			}
+		} else {
+			originalManagedFields = object.GetManagedFields()
+		}
+
 		managedFields := make([]metav1.ManagedFieldsEntry, 0, len(originalManagedFields))
 		for _, managedField := range originalManagedFields {
 			if managedField.Manager == fieldManager &&
@@ -145,8 +154,18 @@ func MigrateManagedFields(ctx context.Context, c client.Client, object client.Ob
 			klog.KRef(objectKey.Namespace, objectKey.Name))
 	}
 
+	var managedFieldsFromObject []metav1.ManagedFieldsEntry
+	if u, ok := object.(*unstructured.Unstructured); ok {
+		managedFieldsFromObject, err = GetUnstructuredManagedFields(u, fieldManager)
+		if err != nil {
+			return err
+		}
+	} else {
+		managedFieldsFromObject = object.GetManagedFields()
+	}
+
 	// Check if a migration is still needed. This should be only done once per object.
-	needsMigration, err := needsMigration(object, fieldManager)
+	needsMigration, err := needsMigration(managedFieldsFromObject, fieldManager)
 	if err != nil {
 		return errors.Wrapf(err, "failed to migrate managedFields for %s %s",
 			objectGVK.Kind, klog.KRef(objectKey.Namespace, objectKey.Name))
@@ -158,9 +177,8 @@ func MigrateManagedFields(ctx context.Context, c client.Client, object client.Ob
 	base := object.DeepCopyObject().(client.Object)
 
 	// Remove managedFields for fieldManager:Apply and manager:Update.
-	originalManagedFields := object.GetManagedFields()
-	managedFields := make([]metav1.ManagedFieldsEntry, 0, len(originalManagedFields))
-	for _, managedField := range originalManagedFields {
+	managedFields := []metav1.ManagedFieldsEntry{}
+	for _, managedField := range object.GetManagedFields() {
 		if managedField.Manager == fieldManager &&
 			managedField.Operation == metav1.ManagedFieldsOperationApply &&
 			managedField.Subresource == "" {
@@ -201,8 +219,8 @@ func MigrateManagedFields(ctx context.Context, c client.Client, object client.Ob
 }
 
 // needsMigration returns true if fieldManager:Apply owns the clusterv1.ClusterNameLabel.
-func needsMigration(object client.Object, fieldManager string) (bool, error) {
-	for _, managedField := range object.GetManagedFields() {
+func needsMigration(managedFields []metav1.ManagedFieldsEntry, fieldManager string) (bool, error) {
+	for _, managedField := range managedFields {
 		//nolint:gocritic // much easier to read this way, not going to use continue instead
 		if managedField.Manager == fieldManager &&
 			managedField.Operation == metav1.ManagedFieldsOperationApply &&

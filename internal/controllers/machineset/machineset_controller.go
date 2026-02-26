@@ -1231,30 +1231,26 @@ func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstru
 
 	currentPartialObjectMetadata := &metav1.PartialObjectMetadata{}
 	currentPartialObjectMetadata.SetGroupVersionKind(obj.GroupVersionKind())
-	managedFields := []metav1.ManagedFieldsEntry{}
-	for _, mf := range obj.GetManagedFields() {
-		if mf.Manager == machineSetMetadataManagerName && mf.Operation == metav1.ManagedFieldsOperationApply && mf.Subresource == "" {
-			managedFields = append(managedFields, mf)
-			break
-		}
+	currentPartialObjectMetadata.SetLabels(obj.GetLabels())
+	currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+	managedFields, err := ssa.GetUnstructuredManagedFields(obj, machineSetMetadataManagerName)
+	if err != nil {
+		return err
 	}
-	if len(managedFields) > 0 {
-		currentPartialObjectMetadata.SetManagedFields(managedFields)
-		currentPartialObjectMetadata.SetLabels(obj.GetLabels())
-		currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+	currentPartialObjectMetadata.SetManagedFields(managedFields)
 
-		// FIXME: use a custom type + applyconfiguration gen here instead of writing a schema manually
-		currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
-		currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
-		err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
-		if err != nil {
-			return err // FIXME: decide what to do on errors
-		}
+	// FIXME: Optimize all cases where we call Unstructured.GetManagedFields and try to block further usage with forbidigo
+	// FIXME: use a custom type + applyconfiguration gen here instead of writing a schema manually
+	currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
+	currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
+	err = managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+	if err != nil {
+		return err // FIXME: decide what to do on errors
+	}
 
-		if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
-			maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
-			return nil
-		}
+	if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
+		maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
+		return nil
 	}
 
 	return ssa.Patch(ctx, r.Client, machineSetMetadataManagerName, updatedObject, ssa.WithCachingProxy{Cache: r.ssaCache, Original: obj})

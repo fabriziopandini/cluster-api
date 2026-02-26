@@ -313,29 +313,30 @@ func (r *KubeadmControlPlaneReconciler) updateLabelsAndAnnotations(ctx context.C
 
 	currentPartialObjectMetadata := &metav1.PartialObjectMetadata{}
 	currentPartialObjectMetadata.SetGroupVersionKind(objGVK)
-	managedFields := []metav1.ManagedFieldsEntry{}
-	for _, mf := range obj.GetManagedFields() {
-		if mf.Manager == kcpMetadataManagerName && mf.Operation == metav1.ManagedFieldsOperationApply && mf.Subresource == "" {
-			managedFields = append(managedFields, mf)
-			break
-		}
-	}
-	if len(managedFields) > 0 {
-		currentPartialObjectMetadata.SetManagedFields(managedFields)
-		currentPartialObjectMetadata.SetLabels(obj.GetLabels())
-		currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
-
-		currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
-		currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(objGVK)
-		err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), kcpMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+	currentPartialObjectMetadata.SetLabels(obj.GetLabels())
+	currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
+	var managedFields []metav1.ManagedFieldsEntry
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		var err error
+		managedFields, err = ssa.GetUnstructuredManagedFields(u, kcpMetadataManagerName)
 		if err != nil {
-			return err // FIXME: decide what to do on errors
+			return err
 		}
+	} else {
+		managedFields = obj.GetManagedFields()
+	}
+	currentPartialObjectMetadata.SetManagedFields(managedFields)
 
-		if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
-			maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
-			return nil
-		}
+	currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
+	currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(objGVK)
+	err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), kcpMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
+	if err != nil {
+		return err // FIXME: decide what to do on errors
+	}
+
+	if maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Labels, updatedObject.GetLabels()) &&
+		maps.Equal(currentPartialObjectMetaOwnedByFieldManager.Annotations, updatedObject.GetAnnotations()) {
+		return nil
 	}
 
 	return ssa.Patch(ctx, r.Client, kcpMetadataManagerName, updatedObject, ssa.WithCachingProxy{Cache: r.ssaCache, Original: obj})
@@ -427,7 +428,7 @@ func (r *KubeadmControlPlaneReconciler) createMachine(ctx context.Context, kcp *
 	// the replacement machine has been created above).
 	delete(kcp.Annotations, controlplanev1.RemediationInProgressAnnotation)
 
-	return  clientutil.WaitForObjectsToBeAddedToTheCache(ctx, r.Client, "Machine creation", machine)
+	return clientutil.WaitForObjectsToBeAddedToTheCache(ctx, r.Client, "Machine creation", machine)
 }
 
 func (r *KubeadmControlPlaneReconciler) updateMachine(ctx context.Context, machine *clusterv1.Machine, kcp *controlplanev1.KubeadmControlPlane, cluster *clusterv1.Cluster) (*clusterv1.Machine, error) {
