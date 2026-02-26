@@ -57,6 +57,7 @@ import (
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util/apiwarnings"
 	"sigs.k8s.io/cluster-api/util/flags"
+	"sigs.k8s.io/cluster-api/util/secret"
 	"sigs.k8s.io/cluster-api/version"
 )
 
@@ -251,12 +252,33 @@ func main() {
 		Cache: cache.Options{
 			DefaultNamespaces: watchNamespaces,
 			SyncPeriod:        &syncPeriod,
+			DefaultTransform:  cache.TransformStripManagedFields(),
 			ByObject: map[client.Object]cache.ByObject{
 				// Note: Only Secrets with the cluster name label are cached.
 				// The default client of the manager won't use the cache for secrets at all (see Client.Cache.DisableFor).
 				// The cached secrets will only be used by the secretCachingClient we create below.
 				&corev1.Secret{}: {
 					Label: clusterSecretCacheSelector,
+					// Drop data of secrets that we don't use.
+					Transform: func(in any) (any, error) {
+						if s, ok := in.(*corev1.Secret); ok {
+							if !secret.HasPurposeSuffix(s.Name) {
+								s.Data = nil
+							}
+						}
+						return in, nil
+					},
+				},
+				&clusterv1.MachineSet{}: {
+					// Drop data of Machines as we only use ownerRefs of MachineSets in clog.AddOwners.
+					Transform: func(in any) (any, error) {
+						if m, ok := in.(*clusterv1.MachineSet); ok {
+							m.SetManagedFields(nil)
+							m.Spec = clusterv1.MachineSetSpec{}
+							m.Status = clusterv1.MachineSetStatus{}
+						}
+						return in, nil
+					},
 				},
 			},
 		},
