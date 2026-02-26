@@ -86,8 +86,9 @@ func getOwners(ctx context.Context, c client.Client, obj metav1.Object) ([]owner
 		}
 
 		// get owners of the MachineSet.
-		var ms clusterv1.MachineSet
-		if err := c.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: ownerRef.Name}, &ms); err != nil {
+		ms := &metav1.PartialObjectMetadata{}
+		ms.SetGroupVersionKind(clusterv1.GroupVersion.WithKind("MachineSet"))
+		if err := c.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: ownerRef.Name}, ms); err != nil {
 			// continue if the MachineSet doesn't exist.
 			if apierrors.IsNotFound(err) {
 				continue

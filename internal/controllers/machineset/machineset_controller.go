@@ -1243,6 +1243,7 @@ func (r *Reconciler) updateLabelsAndAnnotations(ctx context.Context, obj *unstru
 		currentPartialObjectMetadata.SetLabels(obj.GetLabels())
 		currentPartialObjectMetadata.SetAnnotations(obj.GetAnnotations())
 
+		// FIXME: use a custom type + applyconfiguration gen here instead of writing a schema manually
 		currentPartialObjectMetaOwnedByFieldManager := &metav1.PartialObjectMetadata{}
 		currentPartialObjectMetaOwnedByFieldManager.SetGroupVersionKind(obj.GroupVersionKind())
 		err := managedfields.ExtractInto(currentPartialObjectMetadata, Parser().Type("io.k8s.apimachinery.pkg.apis.meta.v1.PartialObjectMeta"), machineSetMetadataManagerName, currentPartialObjectMetaOwnedByFieldManager, "")
