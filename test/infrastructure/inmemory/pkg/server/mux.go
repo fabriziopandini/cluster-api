@@ -152,11 +152,15 @@ func NewWorkloadClustersMux(manager inmemoryruntime.Manager, host string, opts .
 	m.debugServer = http.Server{
 		Handler: inmemoryapi.NewDebugHandler(manager, m.log, m),
 	}
-	l, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprintf("%d", options.DebugPort))) //nolint:noctx
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", options.DebugPort)) //nolint:noctx
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create listener for workload cluster mux")
 	}
-	go func() { _ = m.debugServer.Serve(l) }()
+	go func() {
+		if err := m.debugServer.Serve(l); err != nil {
+			panic(err.Error())
+		}
+	}()
 
 	return m, nil
 }
@@ -521,6 +525,35 @@ func (m *WorkloadClustersMux) AddAPIServer(wclName, podName string, caCert *x509
 	return nil
 }
 
+// StartListener starts the listener for a wcl cluster.
+func (m *WorkloadClustersMux) StartListener(wclName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return errors.Errorf("workloadClusterListener with name %s must be initialized before being stopped", wclName)
+	}
+
+	if wcl.listener != nil {
+		return nil
+	}
+
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", wcl.Port())) //nolint:noctx
+	if err != nil {
+		return errors.Wrapf(err, "failed to start WorkloadClusterListener %s, %s", wclName, fmt.Sprintf(":%d", wcl.Port()))
+	}
+	wcl.listener = l
+	m.log.Info("WorkloadClusterListener started", "listenerName", wclName, "address", wcl.Address())
+
+	go func() {
+		if startServerErr := m.muxServer.ServeTLS(wcl.listener, "", ""); startServerErr != nil && !errors.Is(startServerErr, http.ErrServerClosed) {
+			m.log.Error(startServerErr, "Failed to start WorkloadClusterListener", "listenerName", wclName, "address", wcl.Address())
+		}
+	}()
+	return nil
+}
+
 // DeleteAPIServer removes an API server instance from the WorkloadClusterListener.
 func (m *WorkloadClustersMux) DeleteAPIServer(wclName, podName string) error {
 	m.lock.Lock()
@@ -540,6 +573,28 @@ func (m *WorkloadClustersMux) DeleteAPIServer(wclName, podName string) error {
 		wcl.listener = nil
 		m.log.Info("WorkloadClusterListener stopped because there are no APIServer left", "listenerName", wclName, "address", wcl.Address())
 	}
+	return nil
+}
+
+// StopListener stops the listener for a wcl cluster.
+func (m *WorkloadClustersMux) StopListener(wclName string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return errors.Errorf("workloadClusterListener with name %s must be initialized before being stopped", wclName)
+	}
+
+	if wcl.listener == nil {
+		return nil
+	}
+
+	if err := wcl.listener.Close(); err != nil {
+		return errors.Wrapf(err, "failed to stop WorkloadClusterListener %s, %s", wclName, wcl.HostPort())
+	}
+	wcl.listener = nil
+	m.log.Info("WorkloadClusterListener stopped", "listenerName", wclName, "address", wcl.Address())
 	return nil
 }
 
@@ -613,6 +668,26 @@ func (m *WorkloadClustersMux) DeleteEtcdMember(wclName, podName string) error {
 	m.log.Info("Etcd member removed from WorkloadClusterListener", "listenerName", wclName, "address", wcl.Address(), "podName", podName)
 
 	return nil
+}
+
+// GetCluster return debug info for a wcl cluster.
+func (m *WorkloadClustersMux) GetCluster(wclName string) *inmemoryapi.ClusterDebugInfo {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	wcl, ok := m.workloadClusterListeners[wclName]
+	if !ok {
+		return nil
+	}
+
+	return &inmemoryapi.ClusterDebugInfo{
+		Host:           wcl.host,
+		Port:           wcl.port,
+		ListenerActive: wcl.listener != nil,
+		ResourceGroup:  wcl.resourceGroup,
+		APIServers:     wcl.apiServers.UnsortedList(),
+		EtcdMembers:    wcl.etcdMembers.UnsortedList(),
+	}
 }
 
 // ListListeners implements api.DebugInfoProvider.

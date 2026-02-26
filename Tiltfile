@@ -111,6 +111,7 @@ providers = {
             "../../go.mod",
             "../../go.sum",
             "../container",
+            "../inmemory",
             "api",
             "controllers",
             "docker",

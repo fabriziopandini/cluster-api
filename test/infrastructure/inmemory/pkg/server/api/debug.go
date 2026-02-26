@@ -22,6 +22,7 @@ import (
 	"github.com/emicklei/go-restful/v3"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/klog/v2"
 
 	inmemoryruntime "sigs.k8s.io/cluster-api/test/infrastructure/inmemory/pkg/runtime"
 )
@@ -30,6 +31,19 @@ import (
 // to provide debug info.
 type DebugInfoProvider interface {
 	ListListeners() map[string]string
+	GetCluster(wclName string) *ClusterDebugInfo
+	StartListener(wclName string) error
+	StopListener(wclName string) error
+}
+
+// ClusterDebugInfo defines debug info for a cluster.
+type ClusterDebugInfo struct {
+	Host           string
+	Port           int32
+	ListenerActive bool
+	ResourceGroup  string
+	APIServers     []string
+	EtcdMembers    []string
 }
 
 // NewDebugHandler returns an http.Handler for debugging the server.
@@ -45,7 +59,11 @@ func NewDebugHandler(manager inmemoryruntime.Manager, log logr.Logger, infoProvi
 	ws.Produces(runtime.ContentTypeJSON)
 
 	// Discovery endpoints
+	ws.Route(ws.GET("/").To(debugServer.ping))
 	ws.Route(ws.GET("/listeners").To(debugServer.listenersList))
+	ws.Route(ws.GET("/cluster/{namespace}/{name}").To(debugServer.getCluster))
+	ws.Route(ws.GET("/cluster/{namespace}/{name}/listener/start").To(debugServer.startListener))
+	ws.Route(ws.GET("/cluster/{namespace}/{name}/listener/stop").To(debugServer.stopListener))
 
 	debugServer.container.Add(ws)
 
@@ -70,4 +88,42 @@ func (h *debugHandler) listenersList(_ *restful.Request, resp *restful.Response)
 		_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
 		return
 	}
+}
+
+func (h *debugHandler) ping(_ *restful.Request, resp *restful.Response) {
+	if err := resp.WriteEntity("pong"); err != nil {
+		_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (h *debugHandler) getCluster(req *restful.Request, resp *restful.Response) {
+	clusterDebugInfo := h.infoProvider.GetCluster(klog.KRef(req.PathParameter("namespace"), req.PathParameter("name")).String())
+	if clusterDebugInfo == nil {
+		_ = resp.WriteHeaderAndEntity(http.StatusNotFound, "cluster not found")
+		return
+	}
+
+	if err := resp.WriteEntity(clusterDebugInfo); err != nil {
+		_ = resp.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (h *debugHandler) startListener(req *restful.Request, resp *restful.Response) {
+	if err := h.infoProvider.StartListener(klog.KRef(req.PathParameter("namespace"), req.PathParameter("name")).String()); err != nil {
+		_ = resp.WriteHeaderAndEntity(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.getCluster(req, resp)
+}
+
+func (h *debugHandler) stopListener(req *restful.Request, resp *restful.Response) {
+	if err := h.infoProvider.StopListener(klog.KRef(req.PathParameter("namespace"), req.PathParameter("name")).String()); err != nil {
+		_ = resp.WriteHeaderAndEntity(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.getCluster(req, resp)
 }
