@@ -85,8 +85,8 @@ func init() {
 	RootCmd.Flags().StringVar(&rc.kubeconfigContext, "kubeconfig-context", "",
 		"Context to be used within the kubeconfig file. If empty, current context will be used.")
 	RootCmd.Flags().StringVarP(&rc.config, "config", "c", "",
-		"The config file with the e2e test sequence to be run.")
-	RootCmd.Flags().BoolVar(&rc.dryRun, "dry-run", false, "Dry run the e2e test")
+		"The config file with the test sequence to be run.")
+	RootCmd.Flags().BoolVar(&rc.dryRun, "dry-run", false, "Dry run the test")
 }
 
 func runE2E(_ *cobra.Command, _ []string) error {

@@ -339,7 +339,7 @@ func (m *WorkloadClustersMux) WorkloadClusterByResourceGroup(resouceGroup string
 			return wclName, nil
 		}
 	}
-	return "", errors.Errorf("resouceGroup with name %s not yet registered to a workloadClusterListener", resouceGroup)
+	return "", errors.Errorf("resourceGroup with name %s not yet registered to a workloadClusterListener", resouceGroup)
 }
 
 // AddAPIServer mimics adding an API server instance behind the WorkloadClusterListener.
@@ -632,7 +632,7 @@ func (m *WorkloadClustersMux) ListListeners() map[string]string {
 	for k, l := range m.workloadClusterListeners {
 		ret[k] = l.Address()
 		if l.listener == nil {
-			ret[k] += " (not active)"
+			ret[k] += " (stopped)"
 		}
 	}
 	return ret

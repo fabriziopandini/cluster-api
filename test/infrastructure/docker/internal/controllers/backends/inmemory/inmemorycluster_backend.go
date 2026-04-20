@@ -154,7 +154,7 @@ func (r *ClusterBackendReconciler) ReconcileNormal(ctx context.Context, cluster 
 	if inMemoryCluster.Spec.ControlPlaneEndpoint.Host == "" {
 		inMemoryCluster.Spec.ControlPlaneEndpoint.Host = listener.Host()
 		inMemoryCluster.Spec.ControlPlaneEndpoint.Port = listener.Port()
-		log.Info(fmt.Sprintf("InMemoryCluster assigned controlPlane endpoint %s:%s", inMemoryCluster.Spec.ControlPlaneEndpoint.Host, inMemoryCluster.Spec.ControlPlaneEndpoint.Port))
+		log.Info(fmt.Sprintf("InMemoryCluster assigned controlPlane endpoint %s:%d", inMemoryCluster.Spec.ControlPlaneEndpoint.Host, inMemoryCluster.Spec.ControlPlaneEndpoint.Port))
 	}
 
 	// Mark the InMemoryCluster ready
