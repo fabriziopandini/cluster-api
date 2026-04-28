@@ -157,7 +157,7 @@ func (d *dockerRuntime) GetHostPort(ctx context.Context, containerName, portAndP
 
 	// Loop through the container port bindings and return the first HostPort
 	for port, bindings := range containerInfo.Container.NetworkSettings.Ports {
-		if port.Port() == portAndProtocol {
+		if port.String() == portAndProtocol {
 			for _, binding := range bindings {
 				return binding.HostPort, nil
 			}
