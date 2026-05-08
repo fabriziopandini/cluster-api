@@ -1,6 +1,6 @@
 module sigs.k8s.io/cluster-api
 
-go 1.26.0
+go 1.26.3
 
 require (
 	github.com/MakeNowJust/heredoc v1.0.0
