@@ -84,8 +84,8 @@ type Mount struct {
 // DockerMachineStatus defines the observed state of DockerMachine.
 type DockerMachineStatus struct {
 	// conditions represents the observations of a DockerMachine's current state.
-	// Known condition types are NodeProvisioned, EtcdProvisioned, APIServerProvisioned, VMProvisioned,
-	// ControlPlaneInitialized, BootstrapExecSucceeded, LoadBalancerAvailable, ContainerProvisioned and Paused.
+	// Known condition types are Ready, ContainerProvisioned, CGroupReady, PreLoadedImagesReady,
+	// CloudInitOrIgnitionCompleted and Paused when using the docker backend.
 	// +optional
 	// +listType=map
 	// +listMapKey=type

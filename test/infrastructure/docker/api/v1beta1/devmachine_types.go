@@ -363,25 +363,6 @@ type DevMachineStatus struct {
 	// v1beta2 groups all the fields that will be added or modified in DevMachine's status with the V1Beta2 version.
 	// +optional
 	V1Beta2 *DevMachineV1Beta2Status `json:"v1beta2,omitempty"`
-
-	// backend defines backends status for a DevMachine.
-	// +optional
-	Backend *DevMachineBackendStatus `json:"backend,omitempty"`
-}
-
-// DevMachineBackendStatus define backend status for a DevMachine.
-type DevMachineBackendStatus struct {
-	// docker define backend status for a DevMachine for a machine using docker containers.
-	// +optional
-	Docker *DockerMachineBackendStatus `json:"docker,omitempty"`
-}
-
-// DockerMachineBackendStatus define backend status for a DevMachine for a machine using docker containers.
-type DockerMachineBackendStatus struct {
-	// loadBalancerConfigured denotes that the machine has been
-	// added to the load balancer
-	// +optional
-	LoadBalancerConfigured bool `json:"loadBalancerConfigured"`
 }
 
 // DevMachineV1Beta2Status groups all the fields that will be added or modified in DevMachine with the V1Beta2 version.
